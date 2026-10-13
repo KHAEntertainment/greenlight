@@ -201,6 +201,12 @@ traycer agent inbox --json > /tmp/inbox.ndjson
 #       with the captured real output.
 ```
 
+### Gotchas met
+
+- **GitHub push protection** rejected the first push because a calibration fixture held a realistic Stripe-shaped key. Fixtures that must look like secrets are now assembled at runtime (`FAKE_STRIPE_KEY` in `scripts/calibrate.ts`). Keep new fixtures that way.
+- **The egress proxy** in cloud sessions blocks the classifier providers, `docs.traycer.ai` and `a2a-protocol.org`. Use GitHub sources (raw files) for docs, and run live calls locally.
+- **`biome.jsonc` declares schema 2.4.11.** Biome is pinned to that version; `biome migrate` is needed before upgrading it.
+
 ### Open questions for the owner
 
 - **Q1.** Should escalate mode also forward **output-judge leak notices** upstream, as fire-and-forget notifications to the orchestrator? Today only gate verdicts and `jev_escalate` go upstream.
