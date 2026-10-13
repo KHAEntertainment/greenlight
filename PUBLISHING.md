@@ -1,5 +1,13 @@
 # Publishing
 
+> **Fork note (0.4.0).** This repository now publishes `@khaentertainment/pi-jev2`
+> from `KHAEntertainment/pi-jev2`. Nothing below has been done for the new name
+> yet: the `@khaentertainment` npm scope must exist, and the trusted publisher
+> must be configured with user `KHAEntertainment`, repository `pi-jev2`, workflow
+> `publish.yml`. The history below is upstream's, kept for the method; read
+> `@y0usaf/pi-jev` as `@khaentertainment/pi-jev2` and `y0usaf`/`pi-jev` as
+> `KHAEntertainment`/`pi-jev2` when following it.
+
 npm has one durable route left for this package: trusted publishing (OIDC) from
 `.github/workflows/publish.yml`. Classic tokens were revoked in November 2025,
 TOTP 2FA is retired, and tokens that bypass 2FA are now restricted for direct
