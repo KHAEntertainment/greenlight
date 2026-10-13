@@ -132,8 +132,14 @@ describe("a2a state mapping", () => {
 		expect(normalizeState("TASK_STATE_INPUT_REQUIRED")).toBe("INPUT_REQUIRED");
 		expect(normalizeState("input-required")).toBe("INPUT_REQUIRED");
 	});
-	test("completed without a decision approves; rejected denies; failed is no answer", () => {
-		expect(decisionFromTask({ id: "t", status: { state: "TASK_STATE_COMPLETED" } }, wait())?.decision).toBe("approve");
+	test("completed without a decision is no answer; rejected denies; failed is no answer", () => {
+		expect(() => decisionFromTask({ id: "t", status: { state: "TASK_STATE_COMPLETED" } }, wait())).toThrow("without an approve/deny decision");
+		expect(() =>
+			decisionFromTask(
+				{ id: "t", status: { state: "TASK_STATE_COMPLETED", message: { parts: [{ text: "I reviewed the request." }] } } },
+				wait(),
+			),
+		).toThrow("without an approve/deny decision");
 		expect(decisionFromTask({ id: "t", status: { state: "TASK_STATE_REJECTED" } }, wait())?.decision).toBe("deny");
 		expect(() => decisionFromTask({ id: "t", status: { state: "TASK_STATE_FAILED" } }, wait())).toThrow("failed");
 		expect(

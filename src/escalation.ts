@@ -111,14 +111,25 @@ export function resolveTransport(
 	return "none";
 }
 
-const APPROVE = new Set(["approve", "approved", "allow", "allowed", "yes", "y", "ok", "run", "proceed", "accept", "accepted"]);
-const DENY = new Set(["deny", "denied", "block", "blocked", "no", "n", "reject", "rejected", "refuse", "refused", "stop"]);
-const ESCALATE = new Set(["escalate", "escalated", "human", "ask", "defer", "pending"]);
+/**
+ * Words that decide. A structured `decision` field and a reply that is only
+ * one word may use any of them; a leading word in prose may use only the
+ * unambiguous ones, because "Run this past the user first" or "OK, but deny"
+ * must not read as approval. Anything unclear is no answer, so the local
+ * enforce rule decides.
+ */
+const APPROVE = new Set(["approve", "approved", "allow", "allowed", "accept", "accepted"]);
+const DENY = new Set(["deny", "denied", "block", "blocked", "reject", "rejected", "refuse", "refused"]);
+const ESCALATE = new Set(["escalate", "escalated"]);
+const APPROVE_BARE = new Set([...APPROVE, "yes", "y", "ok", "okay", "proceed"]);
+const DENY_BARE = new Set([...DENY, "no", "n", "stop"]);
+const ESCALATE_BARE = new Set([...ESCALATE, "human", "defer", "pending"]);
 
 /**
  * A decision from whatever the orchestrator sent back. JSON is the contract
- * (`{"decision":"approve","reason":"..."}`); a bare leading word is accepted
- * because the orchestrator is often another LLM agent answering in text.
+ * (`{"decision":"approve","reason":"..."}`); a one-word reply, or an
+ * unambiguous leading word followed by punctuation ("deny: too risky"), is
+ * accepted because the orchestrator is often another LLM agent answering in text.
  * Undefined means "this text is not a decision" - the caller keeps waiting or
  * treats it as no answer, never as a deny.
  */
@@ -126,7 +137,7 @@ export function parseDecision(value: unknown): EscalationDecision | undefined {
 	if (typeof value === "string") return parseDecisionText(value);
 	if (typeof value !== "object" || value === null) return undefined;
 	const raw = Reflect.get(value, "decision") ?? Reflect.get(value, "verdict");
-	const word = typeof raw === "string" ? classifyWord(raw) : undefined;
+	const word = typeof raw === "string" ? classifyWord(raw, true) : undefined;
 	if (!word) {
 		const approved = Reflect.get(value, "approved");
 		if (typeof approved !== "boolean") return undefined;
@@ -143,8 +154,14 @@ function parseDecisionText(text: string): EscalationDecision | undefined {
 		const parsed = parseDecision(json);
 		if (parsed) return parsed;
 	}
-	const match = /^[\s"'`*_[(]*([A-Za-z]+)/.exec(trimmed);
-	const word = match?.[1] ? classifyWord(match[1]) : undefined;
+	const bare = /^[\s"'`*_[(]*([A-Za-z]+)[\s"'`*_\]).!:,;-]*$/.exec(trimmed);
+	if (bare?.[1]) {
+		const word = classifyWord(bare[1], true);
+		return word ? { decision: word } : undefined;
+	}
+	// A leading word counts only when punctuation, not more prose, follows it.
+	const match = /^[\s"'`*_[(]*([A-Za-z]+)(?=\s*[.!:,;\u2013\u2014*_"'`)\]-])/.exec(trimmed);
+	const word = match?.[1] ? classifyWord(match[1], false) : undefined;
 	if (!word) return undefined;
 	const rest = trimmed
 		.slice(match?.[0].length ?? 0)
@@ -153,11 +170,11 @@ function parseDecisionText(text: string): EscalationDecision | undefined {
 	return rest ? { decision: word, reason: rest.slice(0, 500) } : { decision: word };
 }
 
-function classifyWord(word: string): Decision | undefined {
+function classifyWord(word: string, bare: boolean): Decision | undefined {
 	const lower = word.trim().toLowerCase();
-	if (APPROVE.has(lower)) return "approve";
-	if (DENY.has(lower)) return "deny";
-	if (ESCALATE.has(lower)) return "escalate";
+	if ((bare ? APPROVE_BARE : APPROVE).has(lower)) return "approve";
+	if ((bare ? DENY_BARE : DENY).has(lower)) return "deny";
+	if ((bare ? ESCALATE_BARE : ESCALATE).has(lower)) return "escalate";
 	return undefined;
 }
 

@@ -14,7 +14,7 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
+import * as host from "@earendil-works/pi-coding-agent";
 import {
 	DEFAULT_MODEL,
 	DEFAULT_RETRIES,
@@ -23,6 +23,19 @@ import {
 } from "./classifier";
 
 export const CONFIG_FILE = "pi-jev.json";
+
+/**
+ * The host's per-project config dir name, read off a plain-data view of its
+ * exports. Hosts before 0.79.7 do not export it, and a named import there
+ * binds `undefined` and kills the agent at startup (upstream issue #1). Such
+ * a host also has no classifier runtime, so the extension must load far
+ * enough to say "needs pi 0.99" and stay inactive; `.pi` is the default name.
+ */
+function configDirName(): string {
+	const exports: Record<string, unknown> = { ...host };
+	const name = exports.CONFIG_DIR_NAME;
+	return typeof name === "string" && name.length > 0 ? name : ".pi";
+}
 
 /**
  * shadow reports but never blocks; enforce asks the local user; escalate asks
@@ -196,8 +209,9 @@ export function defaultJevConfig(): JevConfig {
 export function loadJevConfig(cwd: string): LoadedJevConfig {
 	const defaults = defaultJevConfig();
 	const warnings: string[] = [];
-	const global = readConfigFile(join(getAgentDir(), CONFIG_FILE), warnings);
-	const project = readConfigFile(join(cwd, CONFIG_DIR_NAME, CONFIG_FILE), warnings);
+	const global = readConfigFile(join(host.getAgentDir(), CONFIG_FILE), warnings);
+	const project = readConfigFile(join(cwd, configDirName(), CONFIG_FILE), warnings);
+	restrictProjectEscalation(project, warnings);
 
 	const config: JevConfig = {
 		...defaults,
@@ -387,6 +401,29 @@ function readConfigFile(path: string, warnings: string[]): ParsedConfigFile {
 		warnings.push(`${path}: ignored ${key} (${IGNORED_HINTS[key] ?? "unknown key or unusable value"})`);
 	}
 	return out;
+}
+
+/**
+ * A repository's own `.pi/pi-jev.json` must not choose where escalations go or
+ * what runs: an A2A URL plus `tokenEnv`/`tokenFile` would send a local secret
+ * as a bearer token to a server that can then approve flagged calls, and the
+ * Traycer command is executed. Those come from the user's global file only.
+ */
+function restrictProjectEscalation(project: ParsedConfigFile, warnings: string[]): void {
+	const escalation = project.escalation;
+	if (!escalation) return;
+	if (escalation.a2a) {
+		delete escalation.a2a;
+		warnings.push(
+			"project pi-jev.json: escalation.a2a is ignored; set it in the global ~/.pi/agent/pi-jev.json",
+		);
+	}
+	if (escalation.traycer?.command) {
+		delete escalation.traycer.command;
+		warnings.push(
+			"project pi-jev.json: escalation.traycer.command is ignored; set it in the global ~/.pi/agent/pi-jev.json",
+		);
+	}
 }
 
 /** Keys 0.3 understood, with what replaced them. */

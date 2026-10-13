@@ -6,6 +6,24 @@ where to pick up. Append a new entry when you stop.
 
 ---
 
+## 2026-10-13: cloud session 1, review round on KHAEntertainment/pi-jev2#1
+
+CodeRabbit raised six findings. All were verified against the code, and all six are fixed:
+
+1. **A2A `COMPLETED` without a decision** now throws, so the local rule decides (`decisionFromTask`). Before, it approved.
+2. **The `CONFIG_DIR_NAME` import is guarded.** It is now read off a namespace view with a `.pi` fallback, so a pre-0.79.7 host reaches the "needs pi 0.99" notice instead of crashing at load. This is the same bug as upstream issue #1.
+3. **A project `.pi/pi-jev.json` can no longer set `escalation.a2a` or `escalation.traycer.command`.** Both are global-only, with a warning. Before, a cloned repo could send a token from `tokenEnv`/`tokenFile` to its own A2A server, have that server approve flagged calls, or pick the command `pi.exec` runs.
+4. **The prose decision parser is strict.**
+   - A one-word reply may be `yes`/`ok`/`no`/`n`, etc.
+   - A leading word in longer prose must be an unambiguous word (approve, deny, block, escalate, ...) followed by punctuation.
+   - "Run this past the user first", "OK, but deny" and "Allow me to check" are now no answer.
+5. **The A2A per-request signal** uses `AbortSignal.any`. The manual listener on the session signal leaked one closure per poll.
+6. **`PUBLISHING.md` and `AGENTS.md`** now describe the first authenticated publish that npm needs before a trusted publisher can be configured.
+
+Tests: 97 pass (12 added). Typecheck and lint are clean.
+
+---
+
 ## 2026-10-13: cloud session 1. Multi-provider classifiers and orchestrator escalation (0.4.0)
 
 Branch: `claude/amazing-goodall-igyjjg`. Base: upstream 0.3.0 (`cbbc35d`).
@@ -56,7 +74,7 @@ Branch: `claude/amazing-goodall-igyjjg`. Base: upstream 0.3.0 (`cbbc35d`).
 | D11 | **Transports own the "escalated to a human" wait.** | Re-sending would create duplicate Traycer messages or A2A tasks, so the transport calls `wait.onEscalated`, which extends the deadline once to `humanTimeoutSeconds`, and keeps waiting on the same thread. pi-rpc is the exception: it re-asks, because each RPC dialog is a fresh request/response. |
 | D12 | **Decisions are not cached.** Identical *concurrent* calls share one escalation. | An approval is for this call, not every later call that looks the same. Parallel siblings from one assistant message must not each ping the orchestrator. |
 | D13 | **A2A uses `returnImmediately` and polls `GetTask`.** No streaming, no push. | Zero-dependency and works through proxies. Streaming and push are listed under Next. |
-| D14 | **A2A `COMPLETED` with no decision means approve.** | "The orchestrator finished the task and did not object." This is debatable (Q2). `REJECTED` = deny. `FAILED`/`CANCELED`/`AUTH_REQUIRED` = no answer, so the fallback runs. |
+| D14 | **A2A `COMPLETED` with no decision is no answer** (changed in review, see below). | Approving it would let a flagged call run on prose like "I reviewed the request", which is weaker than the local rule. `REJECTED` = deny. `FAILED`/`CANCELED`/`AUTH_REQUIRED` = no answer, so the fallback runs. |
 | D15 | **Traycer via the `traycer` CLI** (`agent send --expect-reply`, then poll `agent inbox`), not its Host WebSocket. | The WebSocket RPC (`ws://127.0.0.1:<port>/rpc`, `agent.sendMessage`) is private and versioned. The CLI is the documented surface. Parsers search the CLI's JSON for field names rather than assume paths, because the exact shapes are unverified (see below). |
 | D16 | **`jev_escalate` is registered `defaultActive: false`** and activated at `session_start` only when a transport resolves. | Tools are registered at load, before we know the mode, env or config. This keeps the tool out of the model's prompt for ordinary users. |
 | D17 | **Package renamed** `@khaentertainment/pi-jev2` (user's choice). Not published. | The npm scope and trusted publisher need the owner (`PUBLISHING.md`). Install from git meanwhile. |
@@ -210,7 +228,7 @@ traycer agent inbox --json > /tmp/inbox.ndjson
 ### Open questions for the owner
 
 - **Q1.** Should escalate mode also forward **output-judge leak notices** upstream, as fire-and-forget notifications to the orchestrator? Today only gate verdicts and `jev_escalate` go upstream.
-- **Q2.** Is "A2A task `COMPLETED` without a decision = approve" right for your orchestrator, or should it be "no answer, fall back"? It is one line in `decisionFromTask`.
+- **Q2.** (Resolved in review: `COMPLETED` without a decision is no answer.)
 - **Q3.** Do you want per-model thresholds (`gate.blockOn` keyed by model) once Clef or other models are calibrated, or one threshold set per config file?
 - **Q4.** Cloudflare OAuth without registration might be possible via pi's `!command` key syntax: run `wrangler login` once, then set the provider key to `!wrangler auth token` in `models.json` or `auth.json`. Wrangler's token scopes include `ai:write`. Untested. Worth checking whether pi re-runs the command when the ~1h token expires.
 - **Q5.** Traycer exposes "interview"/question cards only through its private Host protocol. If Traycer publishes an API for that, pi-jev could put a real approval card in front of the human instead of messaging the parent agent.

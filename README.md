@@ -115,11 +115,13 @@ Set `transport` to one of these to force it, or to `none` to treat escalate as e
 | Task state | Means |
 |---|---|
 | `INPUT_REQUIRED` | escalated to a human, keep waiting |
-| `COMPLETED` | the decision in the status message or an artifact (`data` part, else text); approve if none |
+| `COMPLETED` | the decision in the status message or an artifact (`data` part, else text); completing without one is no answer, so the local rule decides |
 | `REJECTED` | deny |
 | `FAILED`, `CANCELED`, `AUTH_REQUIRED` | no answer, so the local rule decides |
 
 A bearer token comes from the env var named by `a2a.tokenEnv`, or from `a2a.tokenFile`. It is scrubbed from notifications like the API key.
+
+`escalation.a2a` and `escalation.traycer.command` are read from the global `~/.pi/agent/pi-jev.json` only. A repository's `.pi/pi-jev.json` that sets them is ignored with a warning, because otherwise a cloned repo could send your token to its own server and have that server approve flagged calls, or choose the command that runs.
 
 **Pi parent over RPC**: the child emits
 
@@ -153,7 +155,7 @@ Every transport carries the same object:
 }
 ```
 
-`arguments` are elided with the gate's `argumentChars` rule, so the orchestrator sees what Jev saw. Replies are parsed leniently, because the orchestrator is often another model: JSON first, then a leading word (`approve`/`yes`/`allow`, `deny`/`no`/`block`, `escalate`).
+`arguments` are elided with the gate's `argumentChars` rule, so the orchestrator sees what Jev saw. Replies are parsed with care, because the orchestrator is often another model. JSON comes first. A reply that is a single word comes next: `approve`/`yes`/`ok`, `deny`/`no`, or `escalate`. Last is an unambiguous leading word followed by punctuation, such as `deny: touches prod`. Anything else, `Run this past the user first` included, is no answer, and the local rule decides.
 
 ### `jev_escalate`
 

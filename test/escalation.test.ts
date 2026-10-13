@@ -39,6 +39,23 @@ describe("parseDecision", () => {
 		expect(parseDecision({ approved: false, reason: "no" })).toEqual({ decision: "deny", reason: "no" });
 	});
 
+	test.each([
+		"Run this past the user first",
+		"OK, but deny - too risky",
+		"Yes, but only after the tests pass",
+		"Allow me to check with the user",
+		"approve because it looks fine",
+		"approvedly",
+		"No idea, ask someone else",
+	])("ambiguous prose is no answer: %s", (input) => expect(parseDecision(input)).toBeUndefined());
+
+	test.each([
+		["ok", "approve"],
+		["Y", "approve"],
+		['"no."', "deny"],
+		["Approved!", "approve"],
+	])("a one-word reply decides: %s", (input, decision) => expect(parseDecision(input)?.decision).toBe(decision as never));
+
 	test("non-decisions are undefined, never deny", () => {
 		expect(parseDecision("let me think about it")).toBeUndefined();
 		expect(parseDecision("")).toBeUndefined();

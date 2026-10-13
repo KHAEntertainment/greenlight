@@ -10,8 +10,8 @@
  * Task state -> decision:
  *   TASK_STATE_INPUT_REQUIRED   escalated to a human: keep waiting
  *   TASK_STATE_COMPLETED        the decision in the status message or an
- *                               artifact (data part, else text); approve when
- *                               the orchestrator completed without saying
+ *                               artifact (data part, else text); a task that
+ *                               completes without one is no answer
  *   TASK_STATE_REJECTED         deny
  *   FAILED / CANCELED / AUTH_REQUIRED, or an error   no answer -> local fallback
  *
@@ -171,16 +171,9 @@ export function a2aEscalator(options: A2AOptions): Escalator {
 
 function withTimeout(signal?: AbortSignal): AbortSignal {
 	const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-	if (!signal) return timeout;
-	const controller = new AbortController();
-	for (const source of [signal, timeout]) {
-		if (source.aborted) {
-			controller.abort(source.reason);
-			break;
-		}
-		source.addEventListener("abort", () => controller.abort(source.reason), { once: true });
-	}
-	return controller.signal;
+	// AbortSignal.any tracks the combined signal weakly, so polling for half
+	// an hour does not pin a listener per request onto the session signal.
+	return signal ? AbortSignal.any([signal, timeout]) : timeout;
 }
 
 /** The decision a task carries, undefined while it is still open. */
@@ -200,8 +193,10 @@ export function decisionFromTask(task: unknown, wait: EscalationWait): Final | u
 			return undefined;
 		case "COMPLETED": {
 			const decision = fromMessage ?? decisionFromArtifacts(Reflect.get(task, "artifacts"));
+			// Completing without saying approve or deny is not an approval: the
+			// local enforce rule decides, as for any other non-answer.
 			if (!decision || decision.decision === "escalate") {
-				return { decision: "approve", by: "a2a", reason: decision?.reason };
+				throw new EscalationError("A2A task completed without an approve/deny decision");
 			}
 			return { ...decision, decision: decision.decision, by: decision.by ?? "a2a" };
 		}
