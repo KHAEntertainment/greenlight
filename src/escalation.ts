@@ -308,48 +308,126 @@ export const REDACTED = "[redacted]";
 const SECRET_KEY = /pass(word|wd|phrase)?$|secret|token|api[-_]?key|auth(orization)?$|cookie|credential|private[-_]?key/i;
 
 /**
- * A value is only redacted when it is a literal. Anything that can run or
- * expand (`$(...)`, backticks, `${VAR}`, pipes, redirects, `;`, `&`) stays
- * visible: hiding it would let an orchestrator approve code it never saw.
+ * Redact the literal text of a credential value while keeping anything that
+ * runs or expands visible: an orchestrator must never approve code it could
+ * not see, and a password must not leak because it contains a `$` or `;`.
+ *
+ * - `'single quoted'` is all literal, so all of it goes.
+ * - `"double quoted"` and unquoted values keep `$(...)`, backtick spans,
+ *   `${...}` and `$VAR`; the literal runs between them become `[redacted]`.
+ * - In an unquoted value, a shell operator (`;`, `&`, `|`, `<`, `>`, `(`)
+ *   ends the value, and everything from it on is a new command and stays.
  */
-const NOT_LITERAL = /[$`(){}<>|;&\\]/;
+export function maskLiteral(value: string): string {
+	if (value.startsWith("'")) return REDACTED;
+	if (value.startsWith('"')) {
+		const close = value.endsWith('"') && value.length > 1 ? value.length - 1 : value.length;
+		return `"${maskSpans(value.slice(1, close))}${value.slice(close)}`;
+	}
+	const operator = firstOperator(value);
+	return maskSpans(value.slice(0, operator)) + value.slice(operator);
+}
 
-function literal(value: string): string {
-	return NOT_LITERAL.test(value) ? value : REDACTED;
+/** Literal runs become `[redacted]`; expansion spans are kept as written. */
+function maskSpans(text: string): string {
+	let out = "";
+	let literal = "";
+	let i = 0;
+	const flush = () => {
+		if (literal.length > 0) out += REDACTED;
+		literal = "";
+	};
+	while (i < text.length) {
+		const end = expansionEnd(text, i);
+		if (end > i) {
+			flush();
+			out += text.slice(i, end);
+			i = end;
+		} else {
+			literal += text[i];
+			i += 1;
+		}
+	}
+	flush();
+	return out;
+}
+
+/** End of an expansion starting at `i`, or `i` when there is none. */
+function expansionEnd(text: string, i: number): number {
+	if (text.startsWith("$(", i)) return matchingClose(text, i + 2, "(", ")");
+	if (text.startsWith("${", i)) return matchingClose(text, i + 2, "{", "}");
+	if (text[i] === "`") {
+		const close = text.indexOf("`", i + 1);
+		return close === -1 ? text.length : close + 1;
+	}
+	const variable = /^\$[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i));
+	return variable ? i + variable[0].length : i;
+}
+
+/** Index after the bracket closing one opened before `from`; the end if unclosed. */
+function matchingClose(text: string, from: number, open: string, close: string): number {
+	let depth = 1;
+	for (let i = from; i < text.length; i++) {
+		if (text[i] === open) depth += 1;
+		else if (text[i] === close && --depth === 0) return i + 1;
+	}
+	return text.length;
+}
+
+/** First shell operator outside an expansion, or the end. */
+function firstOperator(text: string): number {
+	let i = 0;
+	while (i < text.length) {
+		const end = expansionEnd(text, i);
+		if (end > i) {
+			i = end;
+			continue;
+		}
+		if (";&|<>(".includes(text[i] ?? "")) return i;
+		i += 1;
+	}
+	return text.length;
 }
 
 /**
  * Credential shapes that show up in tool arguments: auth headers, `NAME=value`
  * assignments, URL userinfo, PEM blocks, and well-known key prefixes. Each
  * replacement keeps the name so the orchestrator still sees what is used.
- * Patterns that match free text redact only literal values (see `literal`);
+ * Patterns that match free text redact the literal parts of a value (see
+ * `maskLiteral`);
  * the fixed-alphabet patterns (key prefixes, JWTs, bearer tokens) cannot
  * contain shell syntax to begin with.
  */
 const SECRET_PATTERNS: ReadonlyArray<(text: string) => string> = [
-	// Only a complete block: an unterminated BEGIN must not swallow the rest.
-	(text) => text.replace(/-----BEGIN ([A-Z ]*)PRIVATE KEY-----[A-Za-z0-9+/=:\s-]*?-----END \1PRIVATE KEY-----/g, REDACTED),
+	// The header, any encryption headers, and the base64 lines after it (real
+	// or `\n`-escaped newlines), through END when present. Body lines are long
+	// base64 runs, so a command after an unterminated block stays visible.
+	(text) =>
+		text.replace(
+			/-----BEGIN ([A-Z ]*)PRIVATE KEY-----(?:(?:\s|\\n|\\r)+(?:(?:Proc-Type|DEK-Info):[^\n\\]*|[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/=]+(?=(?:\s|\\n|\\r)*-----END)))*(?:(?:\s|\\n|\\r)*-----END \1PRIVATE KEY-----)?/g,
+			REDACTED,
+		),
 	(text) =>
 		text.replace(
 			/\b((?:proxy-)?authorization|x-api-key|api-key|cookie)(\s*[:=]\s*)(?:(bearer|basic|token)\s+)?("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
-			(match, name: string, sep: string, scheme: string | undefined, value: string) =>
-				NOT_LITERAL.test(value) ? match : `${name}${sep}${scheme ? `${scheme} ` : ""}${REDACTED}`,
+			(_match, name: string, sep: string, scheme: string | undefined, value: string) =>
+				`${name}${sep}${scheme ? `${scheme} ` : ""}${maskLiteral(value)}`,
 		),
 	(text) => text.replace(/\b(bearer|basic)\s+(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`),
 	(text) =>
 		text.replace(
 			/\b([A-Za-z0-9_]*(?:pass(?:word|wd)?|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|credential)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
-			(_match, name: string, sep: string, value: string) => `${name}${sep}${literal(value)}`,
+			(_match, name: string, sep: string, value: string) => `${name}${sep}${maskLiteral(value)}`,
 		),
 	(text) =>
 		text.replace(
 			/(--?(?:pass(?:word)?|token|secret|api[-_]?key))([ =])("[^"\n]*"|'[^'\n]*'|\S+)/gi,
-			(_match, flag: string, sep: string, value: string) => `${flag}${sep}${literal(value)}`,
+			(_match, flag: string, sep: string, value: string) => `${flag}${sep}${maskLiteral(value)}`,
 		),
 	(text) =>
 		text.replace(
 			/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]+)@/gi,
-			(_match, prefix: string, value: string) => `${prefix}${literal(value)}@`,
+			(_match, prefix: string, value: string) => `${prefix}${maskLiteral(value)}@`,
 		),
 	(text) =>
 		text.replace(
@@ -365,7 +443,7 @@ const SECRET_PATTERNS: ReadonlyArray<(text: string) => string> = [
  * a token in a `curl -H` or an `export` must not travel with it. `known`
  * replaces secrets this process has already seen (the classifier key, the
  * orchestrator token). Over-redaction of literals is fine: the orchestrator
- * judges intent, not the credential. Code is never hidden (see `literal`).
+ * judges intent, not the credential. Code is never hidden (see `maskLiteral`).
  */
 export function scrubSecrets<T>(value: T, known: (text: string) => string = (text) => text): T {
 	return scrub(value, known, 0) as T;
@@ -385,7 +463,7 @@ function scrub(value: unknown, known: (text: string) => string, depth: number): 
 	for (const [key, item] of Object.entries(value)) {
 		out[key] =
 			typeof item === "string" && item.length > 0 && SECRET_KEY.test(key)
-				? literal(item)
+				? (scrub(maskSpans(item), known, depth + 1) as string)
 				: scrub(item, known, depth + 1);
 	}
 	return out;

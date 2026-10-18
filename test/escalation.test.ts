@@ -155,14 +155,28 @@ describe("scrubSecrets", () => {
 		["git clone https://bob:s3cretpw@git.example/repo.git", "git clone https://bob:[redacted]@git.example/repo.git"],
 		["echo ghp_abcdefghijklmnopqrstuvwxyz0123 | gh auth login --with-token", "echo [redacted] | gh auth login --with-token"],
 		["aws configure set aws_access_key_id AKIAABCDEFGHIJKLMNOP", "aws configure set aws_access_key_id [redacted]"],
-		['{"token": "abcdef123456"}', '{"token": [redacted]}'],
+		['{"token": "abcdef123456"}', '{"token": "[redacted]"}'],
 	])("%s", (input, expected) => {
 		expect(scrubSecrets(input)).toBe(expected);
 	});
 
+	const body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDx==";
+
 	test("PEM private keys are removed whole", () => {
-		const pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAAB3NzaC1yc2E\n-----END OPENSSH PRIVATE KEY-----";
+		const pem = `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----`;
 		expect(scrubSecrets(`cat > id <<EOF\n${pem}\nEOF`)).toBe("cat > id <<EOF\n[redacted]\nEOF");
+	});
+
+	test("an escaped-newline PEM in a JSON string is removed whole", () => {
+		const pem = `-----BEGIN RSA PRIVATE KEY-----\\n${body.replace("\n", "\\n")}\\n-----END RSA PRIVATE KEY-----`;
+		expect(scrubSecrets(`printf '${pem}' > k`)).toBe("printf '[redacted]' > k");
+	});
+
+	test("a PEM body without an END line is still removed, and the next command stays", () => {
+		const command = `cat > k <<EOF\n-----BEGIN RSA PRIVATE KEY-----\n${body}\nEOF\nrm -rf ~`;
+		const scrubbed = scrubSecrets(command);
+		expect(scrubbed).not.toContain("b3BlbnNzaC1rZXkt");
+		expect(scrubbed).toContain("rm -rf ~");
 	});
 
 	test("secret-named object keys are redacted at any depth; the rest is kept", () => {
@@ -195,8 +209,20 @@ describe("scrubSecrets", () => {
 	});
 
 	test("an unterminated PEM header does not swallow the rest of the command", () => {
-		const command = "echo '-----BEGIN RSA PRIVATE KEY-----' && rm -rf ~";
-		expect(scrubSecrets(command)).toBe(command);
+		expect(scrubSecrets("echo '-----BEGIN RSA PRIVATE KEY-----' && rm -rf ~")).toBe("echo '[redacted]' && rm -rf ~");
+	});
+
+	test.each([
+		["mysql --password='p@ss;w$rd' db", "mysql --password=[redacted] db"],
+		["curl -H 'Authorization: Bearer abc$(id)def'", "curl -H 'Authorization: Bearer [redacted]$(id)[redacted]'"],
+		["export API_TOKEN=abc$(id)def;ls", "export API_TOKEN=[redacted]$(id)[redacted];ls"],
+		['export DB_PASSWORD="se;cr$HOMEet"', 'export DB_PASSWORD="[redacted]$HOMEet"'],
+	])("literal parts of a value go, expansions stay: %s", (input, expected) => {
+		expect(scrubSecrets(input)).toBe(expected);
+	});
+
+	test("secret-keyed object values with shell syntax are masked, not sent raw", () => {
+		expect(scrubSecrets({ password: "p;ss$(id)word" })).toEqual({ password: "[redacted]$(id)[redacted]" });
 	});
 
 	test("objects past the depth limit are not sent raw", () => {
