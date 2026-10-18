@@ -37,7 +37,7 @@ export interface EscalationRequest {
 	userRequest?: string;
 	/**
 	 * Set when credentials were replaced with `[redacted]` before sending.
-	 * Only literal values are ever redacted, never shell code, but an
+	 * Only inert values are ever redacted, never shell code, but an
 	 * orchestrator may still deny a request it cannot see in full.
 	 */
 	redacted?: true;
@@ -308,126 +308,65 @@ export const REDACTED = "[redacted]";
 const SECRET_KEY = /pass(word|wd|phrase)?$|secret|token|api[-_]?key|auth(orization)?$|cookie|credential|private[-_]?key/i;
 
 /**
- * Redact the literal text of a credential value while keeping anything that
- * runs or expands visible: an orchestrator must never approve code it could
- * not see, and a password must not leak because it contains a `$` or `;`.
- *
- * - `'single quoted'` is all literal, so all of it goes.
- * - `"double quoted"` and unquoted values keep `$(...)`, backtick spans,
- *   `${...}` and `$VAR`; the literal runs between them become `[redacted]`.
- * - In an unquoted value, a shell operator (`;`, `&`, `|`, `<`, `>`, `(`)
- *   ends the value, and everything from it on is a new command and stays.
+ * A value that is inert wherever it sits in a shell command: no whitespace,
+ * quotes (except one matching pair around it), expansion (`$`, backticks),
+ * escapes, operators or brackets. Replacing it with `[redacted]` cannot hide
+ * code, whatever quoting state the surrounding text is really in. Anything
+ * else in a credential position is not redacted by guesswork: the request is
+ * marked unsafe and is not sent (see `scrubSecrets`).
  */
-export function maskLiteral(value: string): string {
-	if (value.startsWith("'")) return REDACTED;
-	if (value.startsWith('"')) {
-		const close = value.endsWith('"') && value.length > 1 ? value.length - 1 : value.length;
-		return `"${maskSpans(value.slice(1, close))}${value.slice(close)}`;
-	}
-	const operator = firstOperator(value);
-	return maskSpans(value.slice(0, operator)) + value.slice(operator);
+const INERT = /^(["']?)[^\s"'`$\\;&|<>(){}[\]]+\1$/;
+
+interface ScrubState {
+	unsafe: boolean;
 }
 
-/** Literal runs become `[redacted]`; expansion spans are kept as written. */
-function maskSpans(text: string): string {
-	let out = "";
-	let literal = "";
-	let i = 0;
-	const flush = () => {
-		if (literal.length > 0) out += REDACTED;
-		literal = "";
-	};
-	while (i < text.length) {
-		const end = expansionEnd(text, i);
-		if (end > i) {
-			flush();
-			out += text.slice(i, end);
-			i = end;
-		} else {
-			literal += text[i];
-			i += 1;
-		}
-	}
-	flush();
-	return out;
+function inert(value: string, state: ScrubState): string {
+	if (INERT.test(value)) return REDACTED;
+	state.unsafe = true;
+	return value;
 }
 
-/** End of an expansion starting at `i`, or `i` when there is none. */
-function expansionEnd(text: string, i: number): number {
-	if (text.startsWith("$(", i)) return matchingClose(text, i + 2, "(", ")");
-	if (text.startsWith("${", i)) return matchingClose(text, i + 2, "{", "}");
-	if (text[i] === "`") {
-		const close = text.indexOf("`", i + 1);
-		return close === -1 ? text.length : close + 1;
-	}
-	const variable = /^\$[A-Za-z_][A-Za-z0-9_]*/.exec(text.slice(i));
-	return variable ? i + variable[0].length : i;
-}
-
-/** Index after the bracket closing one opened before `from`; the end if unclosed. */
-function matchingClose(text: string, from: number, open: string, close: string): number {
-	let depth = 1;
-	for (let i = from; i < text.length; i++) {
-		if (text[i] === open) depth += 1;
-		else if (text[i] === close && --depth === 0) return i + 1;
-	}
-	return text.length;
-}
-
-/** First shell operator outside an expansion, or the end. */
-function firstOperator(text: string): number {
-	let i = 0;
-	while (i < text.length) {
-		const end = expansionEnd(text, i);
-		if (end > i) {
-			i = end;
-			continue;
-		}
-		if (";&|<>(".includes(text[i] ?? "")) return i;
-		i += 1;
-	}
-	return text.length;
-}
+/** A complete PEM private key: header, base64 lines, END. Nothing else fits. */
+const PEM_BLOCK =
+	/-----BEGIN ([A-Z ]*)PRIVATE KEY-----(?:(?:\r?\n|\\(?:r\\)?n)(?:(?:Proc-Type|DEK-Info): [A-Za-z0-9,-]+|[A-Za-z0-9+/=]+))*(?:\r?\n|\\(?:r\\)?n)-----END \1PRIVATE KEY-----/g;
+const PEM_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
 
 /**
  * Credential shapes that show up in tool arguments: auth headers, `NAME=value`
  * assignments, URL userinfo, PEM blocks, and well-known key prefixes. Each
  * replacement keeps the name so the orchestrator still sees what is used.
- * Patterns that match free text redact the literal parts of a value (see
- * `maskLiteral`);
- * the fixed-alphabet patterns (key prefixes, JWTs, bearer tokens) cannot
- * contain shell syntax to begin with.
+ * The fixed-alphabet patterns (key prefixes, JWTs, bearer tokens) are inert
+ * by construction; the free-text ones go through `inert`.
  */
-const SECRET_PATTERNS: ReadonlyArray<(text: string) => string> = [
-	// The header, any encryption headers, and the base64 lines after it (real
-	// or `\n`-escaped newlines), through END when present. Body lines are long
-	// base64 runs, so a command after an unterminated block stays visible.
-	(text) =>
-		text.replace(
-			/-----BEGIN ([A-Z ]*)PRIVATE KEY-----(?:(?:\s|\\n|\\r)+(?:(?:Proc-Type|DEK-Info):[^\n\\]*|[A-Za-z0-9+/=]{16,}|[A-Za-z0-9+/=]+(?=(?:\s|\\n|\\r)*-----END)))*(?:(?:\s|\\n|\\r)*-----END \1PRIVATE KEY-----)?/g,
-			REDACTED,
-		),
-	(text) =>
+const SECRET_PATTERNS: ReadonlyArray<(text: string, state: ScrubState) => string> = [
+	(text, state) => {
+		const out = text.replace(PEM_BLOCK, REDACTED);
+		// A key whose block we cannot delimit exactly: neither send it nor guess.
+		if (PEM_HEADER.test(out)) state.unsafe = true;
+		return out;
+	},
+	(text, state) =>
 		text.replace(
 			/\b((?:proxy-)?authorization|x-api-key|api-key|cookie)(\s*[:=]\s*)(?:(bearer|basic|token)\s+)?("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
 			(_match, name: string, sep: string, scheme: string | undefined, value: string) =>
-				`${name}${sep}${scheme ? `${scheme} ` : ""}${maskLiteral(value)}`,
+				`${name}${sep}${scheme ? `${scheme} ` : ""}${value === REDACTED ? value : inert(value, state)}`,
 		),
 	(text) => text.replace(/\b(bearer|basic)\s+(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`),
-	(text) =>
+	(text, state) =>
 		text.replace(
 			/\b([A-Za-z0-9_]*(?:pass(?:word|wd)?|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|credential)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
-			(_match, name: string, sep: string, value: string) => `${name}${sep}${maskLiteral(value)}`,
+			(_match, name: string, sep: string, value: string) => `${name}${sep}${inert(value, state)}`,
 		),
-	(text) =>
+	(text, state) =>
 		text.replace(
-			/(--?(?:pass(?:word)?|token|secret|api[-_]?key))([ =])("[^"\n]*"|'[^'\n]*'|\S+)/gi,
-			(_match, flag: string, sep: string, value: string) => `${flag}${sep}${maskLiteral(value)}`,
+			/(--?(?:pass(?:word)?|token|secret|api[-_]?key))([ =])(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|\S+)/gi,
+			(_match, flag: string, sep: string, value: string) => `${flag}${sep}${inert(value, state)}`,
 		),
-	(text) =>
+	(text, state) =>
 		text.replace(
 			/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]+)@/gi,
-			(_match, prefix: string, value: string) => `${prefix}${maskLiteral(value)}@`,
+			(_match, prefix: string, value: string) => `${prefix}${value === REDACTED ? value : inert(value, state)}@`,
 		),
 	(text) =>
 		text.replace(
@@ -437,34 +376,49 @@ const SECRET_PATTERNS: ReadonlyArray<(text: string) => string> = [
 	(text) => text.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, REDACTED),
 ];
 
+export interface ScrubResult<T> {
+	value: T;
+	/** Something was replaced with `[redacted]`. */
+	redacted: boolean;
+	/**
+	 * A credential sits in a value that is not inert (shell syntax, spaces,
+	 * quotes, an undelimited PEM key). It was left in place, so the request
+	 * must not be sent: redacting it could hide code, and sending it leaks it.
+	 */
+	unsafe: boolean;
+}
+
 /**
  * Strip credentials from an escalation request before it leaves the process.
  * The request goes to another agent, a CLI's argv, or a remote A2A server, so
  * a token in a `curl -H` or an `export` must not travel with it. `known`
  * replaces secrets this process has already seen (the classifier key, the
- * orchestrator token). Over-redaction of literals is fine: the orchestrator
- * judges intent, not the credential. Code is never hidden (see `maskLiteral`).
+ * orchestrator token). Only inert values are redacted, so the orchestrator
+ * never approves code it could not see; when that is not enough, `unsafe`
+ * tells the caller to keep the decision local.
  */
-export function scrubSecrets<T>(value: T, known: (text: string) => string = (text) => text): T {
-	return scrub(value, known, 0) as T;
+export function scrubSecrets<T>(value: T, known: (text: string) => string = (text) => text): ScrubResult<T> {
+	const state: ScrubState = { unsafe: false };
+	const scrubbed = scrub(value, known, state, 0) as T;
+	return { value: scrubbed, redacted: JSON.stringify(scrubbed) !== JSON.stringify(value), unsafe: state.unsafe };
 }
 
-function scrub(value: unknown, known: (text: string) => string, depth: number): unknown {
+function scrub(value: unknown, known: (text: string) => string, state: ScrubState, depth: number): unknown {
 	if (typeof value === "string") {
 		let out = known(value);
-		for (const pattern of SECRET_PATTERNS) out = pattern(out);
+		for (const pattern of SECRET_PATTERNS) out = pattern(out, state);
 		return out;
 	}
 	if (typeof value !== "object" || value === null) return value;
 	// Past the depth limit nothing is inspected, so nothing is sent raw.
 	if (depth > 8) return REDACTED;
-	if (Array.isArray(value)) return value.map((item) => scrub(item, known, depth + 1));
+	if (Array.isArray(value)) return value.map((item) => scrub(item, known, state, depth + 1));
 	const out: Record<string, unknown> = {};
 	for (const [key, item] of Object.entries(value)) {
 		out[key] =
 			typeof item === "string" && item.length > 0 && SECRET_KEY.test(key)
-				? (scrub(maskSpans(item), known, depth + 1) as string)
-				: scrub(item, known, depth + 1);
+				? inert(item, state)
+				: scrub(item, known, state, depth + 1);
 	}
 	return out;
 }

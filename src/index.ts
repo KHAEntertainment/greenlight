@@ -453,8 +453,11 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			// The request leaves this process (another agent, a CLI's argv, a
 			// remote A2A server), so credentials in arguments stay behind.
 			const scrubbed = scrubSecrets(request, redact);
-			if (JSON.stringify(scrubbed) !== JSON.stringify(request)) scrubbed.redacted = true;
-			const outcome = await escalate(escalator, scrubbed, config.escalation, {
+			if (scrubbed.unsafe) {
+				throw new Error("a credential in the call is mixed with shell syntax, so it can neither be sent nor redacted safely");
+			}
+			if (scrubbed.redacted) scrubbed.value.redacted = true;
+			const outcome = await escalate(escalator, scrubbed.value, config.escalation, {
 				signal,
 				onEscalated: () => {
 					ctx.ui.setStatus(STATUS_KEY, `jev: ${escalator.name} escalated to a human`);

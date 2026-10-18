@@ -147,6 +147,18 @@ describe("escalate mode", () => {
 		expect(JSON.parse(sent).redacted).toBe(true);
 	});
 
+	test("a credential mixed with shell code is not escalated; the local rule decides", async () => {
+		configure({ gate: { mode: "escalate" } });
+		const pi = fakePi();
+		const { ctx } = await start(pi, { mode: "rpc", input: async () => '{"decision":"approve"}' });
+		const command = 'x="token=" ; rm -rf / ; echo "';
+		await pi.emit("tool_call", { ...destructiveCall, input: { command } }, ctx);
+		expect(ctx.inputs).toHaveLength(0);
+		const record = pi.entries.map((e) => e.data as { kind: string; decision?: string; reason?: string }).find((r) => r.kind === "escalation");
+		expect(record?.decision).toBe("fallback");
+		expect(record?.reason).toContain("mixed with shell syntax");
+	});
+
 	test("pi-rpc parent denies: blocked with the parent's reason", async () => {
 		configure({ gate: { mode: "escalate" } });
 		const pi = fakePi();
