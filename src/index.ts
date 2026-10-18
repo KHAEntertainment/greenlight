@@ -157,6 +157,10 @@ const AskParams = Type.Object({
 	}),
 });
 
+/** Returned instead of an outcome when a request cannot leave safely. */
+const UNSAFE = "unsafe";
+const UNSAFE_REASON = "a credential in it is mixed with shell syntax or a private key, so it can be neither sent nor redacted safely";
+
 export default function jevExtension(pi: ExtensionAPI): void {
 	let loaded: LoadedJevConfig = loadJevConfig(process.cwd());
 	let config: JevConfig = loaded.config;
@@ -177,7 +181,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	const outputCache = new Map<string, { at: number; verdict: OutputVerdict }>();
 	const outputInflight = new Map<string, Promise<OutputVerdict | undefined>>();
 	/** One orchestrator question per identical pending call, shared by siblings. */
-	const escalations = new Map<string, Promise<EscalationOutcome | undefined>>();
+	const escalations = new Map<string, Promise<EscalationOutcome | typeof UNSAFE | undefined>>();
 	/**
 	 * `/jev last` and `/jev output` read these; they are journal records rather
 	 * than live verdicts so a rehydrated session renders the same text as a live
@@ -376,6 +380,12 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 		if (mode === "escalate") {
 			const outcome = await escalationFor(key, event, verdict, ctx);
+			if (outcome === UNSAFE) {
+				// Not an outage: the call itself carries a credential mixed with
+				// shell syntax, which the agent controls. Falling open headless
+				// would let it skip the orchestrator at will, so headless blocks.
+				return localDecision(event.toolName, verdict, `${reason} (not escalated: ${UNSAFE_REASON})`, ctx, true);
+			}
 			if (outcome) {
 				if (outcome.decision === "approve") {
 					ctx.ui.notify(
@@ -397,9 +407,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		verdict: GateVerdict,
 		reason: string,
 		ctx: ExtensionContext,
+		blockHeadless = config.gate.blockWithoutUI,
 	): Promise<{ block: true; reason: string } | undefined> {
 		if (!ctx.hasUI) {
-			if (config.gate.blockWithoutUI) return { block: true, reason };
+			if (blockHeadless) return { block: true, reason };
 			// No UI means no way to approve a flagged call. Degrade to shadow
 			// rather than deadlocking a headless run on a classifier's opinion.
 			ctx.ui.notify(
@@ -425,7 +436,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		event: { toolName: string; input: unknown },
 		verdict: GateVerdict,
 		ctx: ExtensionContext,
-	): Promise<EscalationOutcome | undefined> {
+	): Promise<EscalationOutcome | typeof UNSAFE | undefined> {
 		const pending = escalations.get(key);
 		if (pending) return pending;
 		const promise = runEscalation(
@@ -438,25 +449,37 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		return promise;
 	}
 
-	/** Escalate and journal the outcome; undefined means fall back locally. */
+	/**
+	 * Escalate and journal the outcome; undefined means fall back locally.
+	 * UNSAFE means the request was not sent because it holds a credential that
+	 * can be neither sent nor redacted without hiding code.
+	 */
 	async function runEscalation(
 		request: EscalationRequest,
 		toolName: string,
 		ctx: ExtensionContext,
 		signal: AbortSignal | undefined,
-	): Promise<EscalationOutcome | undefined> {
+	): Promise<EscalationOutcome | typeof UNSAFE | undefined> {
 		const escalator = escalatorFor(ctx);
 		if (!escalator) return undefined;
 		const started = Date.now();
+		// The request leaves this process (another agent, a CLI's argv, a
+		// remote A2A server), so credentials in arguments stay behind.
+		const scrubbed = scrubSecrets(request, redact);
+		if (scrubbed.unsafe) {
+			remember(
+				escalationRecord(
+					toolName,
+					{ fallback: UNSAFE_REASON, transport: escalator.name, latencyMs: 0 },
+					Date.now(),
+				),
+			);
+			ctx.ui.notify(`jev: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
+			return UNSAFE;
+		}
+		if (scrubbed.redacted) scrubbed.value.redacted = true;
 		ctx.ui.setStatus(STATUS_KEY, `jev: waiting on ${escalator.name}`);
 		try {
-			// The request leaves this process (another agent, a CLI's argv, a
-			// remote A2A server), so credentials in arguments stay behind.
-			const scrubbed = scrubSecrets(request, redact);
-			if (scrubbed.unsafe) {
-				throw new Error("a credential in the call is mixed with shell syntax, so it can neither be sent nor redacted safely");
-			}
-			if (scrubbed.redacted) scrubbed.value.redacted = true;
 			const outcome = await escalate(escalator, scrubbed.value, config.escalation, {
 				signal,
 				onEscalated: () => {
@@ -824,10 +847,14 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				cwd: ctx.cwd,
 				at: Date.now(),
 			};
-			const outcome = await runEscalation(request, ESCALATE_TOOL, ctx, signal);
-			const text = outcome
-				? `${describeOutcome(outcome)}.`
-				: "no decision: the orchestrator did not answer in time. Ask the user before taking the action.";
+			const result = await runEscalation(request, ESCALATE_TOOL, ctx, signal);
+			const outcome = result === UNSAFE ? undefined : result;
+			const text =
+				result === UNSAFE
+					? `not sent: ${UNSAFE_REASON}. Leave the credential out of the question, or ask the user.`
+					: outcome
+						? `${describeOutcome(outcome)}.`
+						: "no decision: the orchestrator did not answer in time. Ask the user before taking the action.";
 			return {
 				content: [{ type: "text" as const, text: `jev_escalate: ${text}` }],
 				details: { ok: outcome !== undefined, outcome },

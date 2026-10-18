@@ -327,24 +327,25 @@ function inert(value: string, state: ScrubState): string {
 	return value;
 }
 
-/** A complete PEM private key: header, base64 lines, END. Nothing else fits. */
-const PEM_BLOCK =
-	/-----BEGIN ([A-Z ]*)PRIVATE KEY-----(?:(?:\r?\n|\\(?:r\\)?n)(?:(?:Proc-Type|DEK-Info): [A-Za-z0-9,-]+|[A-Za-z0-9+/=]+))*(?:\r?\n|\\(?:r\\)?n)-----END \1PRIVATE KEY-----/g;
-const PEM_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----/;
+/**
+ * A PEM private key is never redacted: its base64 lines cannot be told apart
+ * from short commands (`reboot`, `/bin/sh`) on lines of their own, so cutting
+ * out a "block" could hide code. Any header makes the request unsafe.
+ */
+const PEM_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----|BEGIN[A-Z ]*PRIVATE KEY/;
 
 /**
  * Credential shapes that show up in tool arguments: auth headers, `NAME=value`
- * assignments, URL userinfo, PEM blocks, and well-known key prefixes. Each
+ * assignments, URL userinfo, and well-known key prefixes (PEM keys mark the
+ * request unsafe instead). Each
  * replacement keeps the name so the orchestrator still sees what is used.
  * The fixed-alphabet patterns (key prefixes, JWTs, bearer tokens) are inert
  * by construction; the free-text ones go through `inert`.
  */
 const SECRET_PATTERNS: ReadonlyArray<(text: string, state: ScrubState) => string> = [
 	(text, state) => {
-		const out = text.replace(PEM_BLOCK, REDACTED);
-		// A key whose block we cannot delimit exactly: neither send it nor guess.
-		if (PEM_HEADER.test(out)) state.unsafe = true;
-		return out;
+		if (PEM_HEADER.test(text)) state.unsafe = true;
+		return text;
 	},
 	(text, state) =>
 		text.replace(

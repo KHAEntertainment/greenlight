@@ -17,8 +17,9 @@ Follow-up from an automated security review of that commit, also fixed:
 
 - **Redaction could hide code from the orchestrator, and attempts to mask around code leaked or hid things.** Three rounds of automated review showed that regexes cannot reliably tell a literal secret from shell code: `x="token=" ; rm -rf / ; echo "` reads as a quoted value to any quote-matching regex. The final design (`scrubSecrets` in `src/escalation.ts`) does not guess:
   - A value is redacted only when it is inert in any quoting context (`INERT`: no whitespace, inner quotes, `$`, backticks, backslash, operators or brackets).
-  - A PEM key is redacted only as one exact BEGIN…END block of base64 lines.
-  - Anything else in a credential position marks the request `unsafe`. `runEscalation` then does not send it, journals a fallback, and the local enforce rule decides. That is the existing fail-open path, so AGENTS.md holds.
+  - A PEM private key is never redacted. Its base64 lines cannot be told from one-word commands (`reboot`, `/bin/sh`), so any header marks the request unsafe.
+  - Anything else in a credential position also marks the request `unsafe`. `runEscalation` does not send it, journals a fallback, and returns `UNSAFE`.
+  - **On `UNSAFE` the gate asks the local user, and a headless run blocks**, whatever `blockWithoutUI` says. This deliberately departs from fail-open: the agent controls the call's text, so failing open would let it skip the orchestrator by adding `token=$(x)` to any command. It is recorded in AGENTS.md as the one exception.
   - A sent request with redactions carries `redacted: true`.
 - **Objects past the depth limit went out raw.** They are now replaced with `[redacted]`.
 - **`model` is global-only.** A repo could pick a lenient or uncalibrated classifier. That also made the "key follows the provider" guard unnecessary, so it was removed.
@@ -26,7 +27,7 @@ Follow-up from an automated security review of that commit, also fixed:
 
 Decision: the classifier itself still receives raw (elided) arguments, as upstream does. Scrubbing those would hide exactly what the gate needs to judge exfiltration. Only the orchestrator path is scrubbed.
 
-Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. Tests: 131 pass (34 added). Typecheck and lint are clean.
+Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. Tests: 133 pass (36 added). Typecheck and lint are clean.
 
 Pick up here: live test on this machine. It needs classifier credentials, because `~/.pi/agent/auth.json` has none for typesafe/openrouter/cloudflare yet. Run `/login openrouter` or set `TYPESAFE_API_KEY`, install with `pi install git:github.com/KHAEntertainment/pi-jev2`, then try shadow mode, then enforce.
 

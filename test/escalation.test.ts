@@ -147,7 +147,6 @@ describe("pollUntil", () => {
 });
 
 describe("scrubSecrets", () => {
-	const text = (value: string) => scrubSecrets(value).value;
 
 	test.each([
 		['curl -H "Authorization: Bearer abc.def-ghi_jkl" https://x.example', 'curl -H "Authorization: Bearer [redacted]" https://x.example'],
@@ -189,26 +188,16 @@ describe("scrubSecrets", () => {
 
 	const body = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\nQyNTUxOQAAACDx==";
 
-	test("a complete PEM private key is removed whole", () => {
-		const pem = `-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----`;
-		const result = scrubSecrets(`cat > id <<EOF\n${pem}\nEOF`);
-		expect(result.value).toBe("cat > id <<EOF\n[redacted]\nEOF");
-		expect(result.unsafe).toBe(false);
-	});
-
-	test("an escaped-newline PEM is removed whole", () => {
-		const pem = `-----BEGIN RSA PRIVATE KEY-----\\n${body.replace("\n", "\\n")}\\n-----END RSA PRIVATE KEY-----`;
-		expect(text(`printf '${pem}' > k`)).toBe("printf '[redacted]' > k");
-	});
-
 	test.each([
+		[`cat > id <<EOF\n-----BEGIN OPENSSH PRIVATE KEY-----\n${body}\n-----END OPENSSH PRIVATE KEY-----\nEOF`],
+		[`printf '-----BEGIN RSA PRIVATE KEY-----\\n${body.replace("\n", "\\n")}\\n-----END RSA PRIVATE KEY-----' > k`],
 		[`cat > k <<EOF\n-----BEGIN RSA PRIVATE KEY-----\n${body}\nEOF\nrm -rf ~`],
 		["echo '-----BEGIN RSA PRIVATE KEY-----' && rm -rf ~"],
-		[`-----BEGIN RSA PRIVATE KEY-----\n${body}\n; rm -rf ~\n-----END RSA PRIVATE KEY-----`],
-	])("a PEM key that is not one exact block is left in place and marked unsafe", (input) => {
+		["echo -----BEGIN RSA PRIVATE KEY-----\nreboot\n-----END RSA PRIVATE KEY-----"],
+	])("any PEM private key is left in place and marked unsafe, never cut out", (input) => {
 		const result = scrubSecrets(input);
 		expect(result.unsafe).toBe(true);
-		expect(result.value).toContain("rm -rf ~");
+		expect(result.value).toBe(input);
 	});
 
 	test("secret-named object keys are redacted at any depth; the rest is kept", () => {

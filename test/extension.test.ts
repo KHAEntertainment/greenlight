@@ -159,6 +159,27 @@ describe("escalate mode", () => {
 		expect(record?.reason).toContain("mixed with shell syntax");
 	});
 
+	test("an unsafe request blocks headless instead of failing open", async () => {
+		// A headless transport; the request must never reach it.
+		configure({ gate: { mode: "escalate" }, escalation: { transport: "a2a", a2a: { url: "http://127.0.0.1:9/a2a" } } });
+		const pi = fakePi();
+		const { ctx } = await start(pi, { mode: "print", hasUI: false });
+		const command = "export API_TOKEN=$(cat ~/.token) && rm -rf src";
+		const result = (await pi.emit("tool_call", { ...destructiveCall, input: { command } }, ctx)) as { block: boolean; reason: string };
+		expect(result.block).toBe(true);
+		expect(result.reason).toContain("not escalated");
+	});
+
+	test("an unsafe request asks the local user when there is a UI", async () => {
+		configure({ gate: { mode: "escalate" } });
+		const pi = fakePi();
+		const { ctx } = await start(pi, { mode: "rpc", confirm: true, input: async () => '{"decision":"approve"}' });
+		const command = "export API_TOKEN=$(cat ~/.token) && rm -rf src";
+		expect(await pi.emit("tool_call", { ...destructiveCall, input: { command } }, ctx)).toBeUndefined();
+		expect(ctx.inputs).toHaveLength(0);
+		expect(ctx.confirms).toHaveLength(1);
+	});
+
 	test("pi-rpc parent denies: blocked with the parent's reason", async () => {
 		configure({ gate: { mode: "escalate" } });
 		const pi = fakePi();
