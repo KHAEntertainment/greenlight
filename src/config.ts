@@ -7,8 +7,10 @@
  * optional key override.
  *
  * Layering: built-in defaults <- ~/.pi/agent/pi-jev.json <- <cwd>/.pi/pi-jev.json.
- * Project settings win. Only keys actually present in a file override, so a
- * project file can set one field without restating the rest.
+ * Only keys actually present in a file override, so a project file can set
+ * one field without restating the rest. A project file is untrusted: it can
+ * tighten the gate but not loosen it, and cannot set credentials or where
+ * escalations go (see `restrictProject`).
  */
 
 import { readFileSync } from "node:fs";
@@ -207,57 +209,52 @@ export function defaultJevConfig(): JevConfig {
 }
 
 export function loadJevConfig(cwd: string): LoadedJevConfig {
-	const defaults = defaultJevConfig();
 	const warnings: string[] = [];
 	const global = readConfigFile(join(host.getAgentDir(), CONFIG_FILE), warnings);
 	const project = readConfigFile(join(cwd, configDirName(), CONFIG_FILE), warnings);
-	restrictProjectEscalation(project, warnings);
-
-	const config: JevConfig = {
-		...defaults,
-		...global,
-		...project,
-		gate: {
-			...defaults.gate,
-			...global.gate,
-			...project.gate,
-			blockOn: {
-				...defaults.gate.blockOn,
-				...global.gate?.blockOn,
-				...project.gate?.blockOn,
-			},
-			tools: project.gate?.tools ?? global.gate?.tools ?? defaults.gate.tools,
-		},
-		output: {
-			...defaults.output,
-			...global.output,
-			...project.output,
-			tools:
-				project.output?.tools ?? global.output?.tools ?? defaults.output.tools,
-		},
-		escalation: {
-			...defaults.escalation,
-			...global.escalation,
-			...project.escalation,
-			traycer: {
-				...defaults.escalation.traycer,
-				...global.escalation?.traycer,
-				...project.escalation?.traycer,
-			},
-			a2a: {
-				...defaults.escalation.a2a,
-				...global.escalation?.a2a,
-				...project.escalation?.a2a,
-			},
-		},
-	};
+	const base = layer(defaultJevConfig(), global);
+	restrictProject(base, project, warnings);
+	const config = layer(base, project);
 	// A bare id keeps meaning TypeSafe; store the qualified form so status
 	// lines and journal records name the provider.
 	const spec = parseModelSpec(config.model);
 	config.model = `${spec.provider}/${spec.id}`;
 
-	const key = resolveApiKey(config, warnings);
+	let key = resolveApiKey(config, warnings);
+	// The key override was written for the global model's provider. A project
+	// that picks another provider must not receive it.
+	if (key && project.model && parseModelSpec(base.model).provider !== spec.provider) {
+		key = undefined;
+		warnings.push(
+			`project pi-jev.json: model ${config.model} uses another provider than the global model, so the global apiKey/apiKeyFile is not sent to it`,
+		);
+	}
 	return { config: { ...config, apiKey: key }, warnings };
+}
+
+/** One config file over a full config; only the keys the file declared win. */
+function layer(base: JevConfig, file: ParsedConfigFile): JevConfig {
+	return {
+		...base,
+		...file,
+		gate: {
+			...base.gate,
+			...file.gate,
+			blockOn: { ...base.gate.blockOn, ...file.gate?.blockOn },
+			tools: file.gate?.tools ?? base.gate.tools,
+		},
+		output: {
+			...base.output,
+			...file.output,
+			tools: file.output?.tools ?? base.output.tools,
+		},
+		escalation: {
+			...base.escalation,
+			...file.escalation,
+			traycer: { ...base.escalation.traycer, ...file.escalation?.traycer },
+			a2a: { ...base.escalation.a2a, ...file.escalation?.a2a },
+		},
+	};
 }
 
 /**
@@ -404,25 +401,92 @@ function readConfigFile(path: string, warnings: string[]): ParsedConfigFile {
 }
 
 /**
- * A repository's own `.pi/pi-jev.json` must not choose where escalations go or
- * what runs: an A2A URL plus `tokenEnv`/`tokenFile` would send a local secret
- * as a bearer token to a server that can then approve flagged calls, and the
- * Traycer command is executed. Those come from the user's global file only.
+ * A repository's own `.pi/pi-jev.json` is untrusted: cloning a repo must not
+ * weaken the user's gate or choose where secrets and escalations go.
+ *
+ * - Global only: `apiKey`/`apiKeyFile` (a file path read and sent as a
+ *   credential), `escalation.transport`, `escalation.a2a` (a URL plus a local
+ *   token would reach a server that can then approve flagged calls) and
+ *   `escalation.traycer` (the command is executed; the parent agent decides).
+ * - Tighten only, against defaults plus the global file: the gate can be
+ *   turned on, moved off `shadow`, given more tools, lower thresholds, a
+ *   lower `minConfidence`, `blockWithoutUI`, more argument context and a
+ *   longer timeout. A value that loosens any of these is ignored with a
+ *   warning.
  */
-function restrictProjectEscalation(project: ParsedConfigFile, warnings: string[]): void {
-	const escalation = project.escalation;
-	if (!escalation) return;
-	if (escalation.a2a) {
-		delete escalation.a2a;
-		warnings.push(
-			"project pi-jev.json: escalation.a2a is ignored; set it in the global ~/.pi/agent/pi-jev.json",
-		);
+function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: string[]): void {
+	const ignore = (key: string, why: string) =>
+		warnings.push(`project pi-jev.json: ${key} is ignored; ${why}`);
+	const globalOnly = "set it in the global ~/.pi/agent/pi-jev.json";
+	const looser = (current: unknown) =>
+		`a project file can only tighten the gate (current: ${JSON.stringify(current)})`;
+
+	if (project.apiKey !== undefined) {
+		delete project.apiKey;
+		ignore("apiKey", globalOnly);
 	}
-	if (escalation.traycer?.command) {
-		delete escalation.traycer.command;
-		warnings.push(
-			"project pi-jev.json: escalation.traycer.command is ignored; set it in the global ~/.pi/agent/pi-jev.json",
-		);
+	if (project.apiKeyFile !== undefined) {
+		delete project.apiKeyFile;
+		ignore("apiKeyFile", globalOnly);
+	}
+	if (project.timeoutMs !== undefined && project.timeoutMs < base.timeoutMs) {
+		delete project.timeoutMs;
+		ignore("timeoutMs", looser(base.timeoutMs));
+	}
+	if (project.retries !== undefined && project.retries < base.retries) {
+		delete project.retries;
+		ignore("retries", looser(base.retries));
+	}
+
+	const escalation = project.escalation;
+	if (escalation) {
+		for (const key of ["transport", "a2a", "traycer"] as const) {
+			if (escalation[key] === undefined) continue;
+			delete escalation[key];
+			ignore(`escalation.${key}`, globalOnly);
+		}
+	}
+
+	const gate = project.gate;
+	if (!gate) return;
+	if (gate.enabled === false && base.gate.enabled) {
+		delete gate.enabled;
+		ignore("gate.enabled", looser(true));
+	}
+	if (gate.mode !== undefined && gate.mode !== base.gate.mode && base.gate.mode !== "shadow") {
+		delete gate.mode;
+		ignore("gate.mode", looser(base.gate.mode));
+	}
+	if (gate.blockWithoutUI === false && base.gate.blockWithoutUI) {
+		delete gate.blockWithoutUI;
+		ignore("gate.blockWithoutUI", looser(true));
+	}
+	if (gate.minConfidence !== undefined && gate.minConfidence > base.gate.minConfidence) {
+		delete gate.minConfidence;
+		ignore("gate.minConfidence", looser(base.gate.minConfidence));
+	}
+	if (gate.argumentChars !== undefined && gate.argumentChars < base.gate.argumentChars) {
+		delete gate.argumentChars;
+		ignore("gate.argumentChars", looser(base.gate.argumentChars));
+	}
+	if (gate.tools) {
+		const requested = gate.tools;
+		const kept = base.gate.tools.filter((tool) => !requested.includes(tool));
+		gate.tools = [...new Set([...base.gate.tools, ...requested])];
+		if (kept.length > 0) {
+			warnings.push(
+				`project pi-jev.json: gate.tools adds to the global list and cannot remove from it; still judged: ${kept.join(", ")}`,
+			);
+		}
+	}
+	if (gate.blockOn) {
+		for (const key of Object.keys(gate.blockOn) as (keyof GateThresholds)[]) {
+			const value = gate.blockOn[key];
+			if (value !== undefined && value > base.gate.blockOn[key]) {
+				delete gate.blockOn[key];
+				ignore(`gate.blockOn.${key}`, looser(base.gate.blockOn[key]));
+			}
+		}
 	}
 }
 

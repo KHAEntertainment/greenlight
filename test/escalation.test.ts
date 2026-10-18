@@ -8,6 +8,7 @@ import {
 	parseDecision,
 	pollUntil,
 	resolveTransport,
+	scrubSecrets,
 	type EscalationRequest,
 	type Escalator,
 } from "../src/escalation";
@@ -142,5 +143,49 @@ describe("pollUntil", () => {
 		await expect(
 			pollUntil(async () => undefined, { intervalMs: 5, wait: { deadline: Date.now() + 5000, signal: controller.signal } }),
 		).rejects.toThrow("aborted");
+	});
+});
+
+describe("scrubSecrets", () => {
+	test.each([
+		['curl -H "Authorization: Bearer abc.def-ghi_jkl" https://x.example', 'curl -H "Authorization: Bearer [redacted]" https://x.example'],
+		["curl -H 'X-Api-Key: 12345678abcdef' https://x.example", "curl -H 'X-Api-Key: [redacted]' https://x.example"],
+		["export OPENAI_API_KEY=sk-proj-abcdefghijklmnop1234 && run", "export OPENAI_API_KEY=[redacted] && run"],
+		["mysql --password=hunter2hunter2 db", "mysql --password=[redacted] db"],
+		["git clone https://bob:s3cretpw@git.example/repo.git", "git clone https://bob:[redacted]@git.example/repo.git"],
+		["echo ghp_abcdefghijklmnopqrstuvwxyz0123 | gh auth login --with-token", "echo [redacted] | gh auth login --with-token"],
+		["aws configure set aws_access_key_id AKIAABCDEFGHIJKLMNOP", "aws configure set aws_access_key_id [redacted]"],
+		['{"token": "abcdef123456"}', '{"token": [redacted]}'],
+	])("%s", (input, expected) => {
+		expect(scrubSecrets(input)).toBe(expected);
+	});
+
+	test("PEM private keys are removed whole", () => {
+		const pem = "-----BEGIN OPENSSH PRIVATE KEY-----\nAAAAB3NzaC1yc2E\n-----END OPENSSH PRIVATE KEY-----";
+		expect(scrubSecrets(`cat > id <<EOF\n${pem}\nEOF`)).toBe("cat > id <<EOF\n[redacted]\nEOF");
+	});
+
+	test("secret-named object keys are redacted at any depth; the rest is kept", () => {
+		const scrubbed = scrubSecrets({
+			...sampleRequest(),
+			arguments: { url: "https://x.example", headers: { Authorization: "abc", Accept: "json" }, password: "pw" },
+		});
+		expect(scrubbed.arguments).toEqual({
+			url: "https://x.example",
+			headers: { Authorization: "[redacted]", Accept: "json" },
+			password: "[redacted]",
+		});
+		expect(scrubbed.verdict).toEqual(sampleRequest().verdict);
+		expect(scrubbed.tool).toBe("bash");
+	});
+
+	test("known secrets are replaced through the supplied redactor", () => {
+		const known = (text: string) => text.split("plainword-secret").join("[redacted]");
+		expect(scrubSecrets({ question: "use plainword-secret here" }, known)).toEqual({ question: "use [redacted] here" });
+	});
+
+	test("ordinary commands pass through unchanged", () => {
+		const command = "rm -rf build && npm run test -- --grep tokenizer";
+		expect(scrubSecrets(command)).toBe(command);
 	});
 });

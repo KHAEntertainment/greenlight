@@ -34,6 +34,7 @@ import {
 	escalate,
 	newRequestId,
 	resolveTransport,
+	scrubSecrets,
 	type EscalationOutcome,
 	type EscalationRequest,
 	type Escalator,
@@ -449,7 +450,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		const started = Date.now();
 		ctx.ui.setStatus(STATUS_KEY, `jev: waiting on ${escalator.name}`);
 		try {
-			const outcome = await escalate(escalator, request, config.escalation, {
+			// The request leaves this process (another agent, a CLI's argv, a
+			// remote A2A server), so credentials in arguments stay behind.
+			const outcome = await escalate(escalator, scrubSecrets(request, redact), config.escalation, {
 				signal,
 				onEscalated: () => {
 					ctx.ui.setStatus(STATUS_KEY, `jev: ${escalator.name} escalated to a human`);

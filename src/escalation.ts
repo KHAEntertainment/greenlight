@@ -296,6 +296,70 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 	});
 }
 
+export const REDACTED = "[redacted]";
+
+/** Object keys whose string values are credentials, wherever they nest. */
+const SECRET_KEY = /pass(word|wd|phrase)?$|secret|token|api[-_]?key|auth(orization)?$|cookie|credential|private[-_]?key/i;
+
+/**
+ * Credential shapes that show up in tool arguments: auth headers, `NAME=value`
+ * assignments, URL userinfo, PEM blocks, and well-known key prefixes. Each
+ * replacement keeps the name so the orchestrator still sees what is used.
+ */
+const SECRET_PATTERNS: ReadonlyArray<(text: string) => string> = [
+	(text) => text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g, REDACTED),
+	(text) =>
+		text.replace(
+			/\b((?:proxy-)?authorization|x-api-key|api-key|cookie)(\s*[:=]\s*)(?:(bearer|basic|token)\s+)?("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
+			(_match, name: string, sep: string, scheme: string | undefined) =>
+				`${name}${sep}${scheme ? `${scheme} ` : ""}${REDACTED}`,
+		),
+	(text) => text.replace(/\b(bearer|basic)\s+(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`),
+	(text) =>
+		text.replace(
+			/\b([A-Za-z0-9_]*(?:pass(?:word|wd)?|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|credential)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
+			`$1$2${REDACTED}`,
+		),
+	(text) => text.replace(/(--?(?:pass(?:word)?|token|secret|api[-_]?key))([ =])("[^"\n]*"|'[^'\n]*'|\S+)/gi, `$1$2${REDACTED}`),
+	(text) => text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi, `$1${REDACTED}@`),
+	(text) =>
+		text.replace(
+			/\b(sk-(?:ant-|proj-|or-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36})\b/g,
+			REDACTED,
+		),
+	(text) => text.replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}/g, REDACTED),
+];
+
+/**
+ * Strip credentials from an escalation request before it leaves the process.
+ * The request goes to another agent, a CLI's argv, or a remote A2A server, so
+ * a token in a `curl -H` or an `export` must not travel with it. `known`
+ * replaces secrets this process has already seen (the classifier key, the
+ * orchestrator token). Over-redaction is fine: the orchestrator judges intent,
+ * not the literal credential.
+ */
+export function scrubSecrets<T>(value: T, known: (text: string) => string = (text) => text): T {
+	return scrub(value, known, 0) as T;
+}
+
+function scrub(value: unknown, known: (text: string) => string, depth: number): unknown {
+	if (typeof value === "string") {
+		let out = known(value);
+		for (const pattern of SECRET_PATTERNS) out = pattern(out);
+		return out;
+	}
+	if (depth > 8 || typeof value !== "object" || value === null) return value;
+	if (Array.isArray(value)) return value.map((item) => scrub(item, known, depth + 1));
+	const out: Record<string, unknown> = {};
+	for (const [key, item] of Object.entries(value)) {
+		out[key] =
+			typeof item === "string" && item.length > 0 && SECRET_KEY.test(key)
+				? REDACTED
+				: scrub(item, known, depth + 1);
+	}
+	return out;
+}
+
 export function newRequestId(): string {
 	const random = globalThis.crypto?.randomUUID?.();
 	return random ?? `jev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;

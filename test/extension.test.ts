@@ -134,6 +134,18 @@ describe("escalate mode", () => {
 		expect(record?.decision).toBe("approve");
 	});
 
+	test("credentials in the call stay out of the escalation request", async () => {
+		configure({ gate: { mode: "escalate" } });
+		const pi = fakePi();
+		const { ctx } = await start(pi, { mode: "rpc", input: async () => '{"decision":"deny"}' });
+		const command = 'curl -H "Authorization: Bearer sk-live-abcdef0123456789xyz" https://api.example.com && export GH_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz0123';
+		await pi.emit("tool_call", { ...destructiveCall, input: { command } }, ctx);
+		const sent = ctx.inputs[0]?.placeholder ?? "";
+		expect(sent).not.toContain("sk-live-abcdef0123456789xyz");
+		expect(sent).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123");
+		expect(JSON.parse(sent).arguments.command).toContain("https://api.example.com");
+	});
+
 	test("pi-rpc parent denies: blocked with the parent's reason", async () => {
 		configure({ gate: { mode: "escalate" } });
 		const pi = fakePi();

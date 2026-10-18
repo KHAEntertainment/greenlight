@@ -6,6 +6,23 @@ where to pick up. Append a new entry when you stop.
 
 ---
 
+## 2026-10-18: local session 1, second review round on KHAEntertainment/pi-jev2#1
+
+Moved from Claude Code Cloud to the local machine (pi 1.3.0 at `/opt/homebrew/bin/pi`; `ModelRegistry.classify` and the RPC `input` dialog are present there, so the 1.2.0 assumptions hold). A local review found two gaps the first round missed, both fixed on the PR branch:
+
+1. **Escalation requests carried credentials.** `summarizeArguments` only elides long strings, so a short `curl -H "Authorization: Bearer …"` or `export GH_TOKEN=…` reached the orchestrator verbatim: Traycer argv, a remote A2A server, or the RPC placeholder. `scrubSecrets` in `src/escalation.ts` now runs over the whole request in `runEscalation` (gate and `jev_escalate` alike). It replaces header values, bearer/basic tokens, secret-named `NAME=value` and `--flag value`, URL userinfo, PEM keys, JWTs, well-known key prefixes, secret-named object keys, and anything `redact()` already knows.
+2. **A project `.pi/pi-jev.json` could still weaken the gate.** The first round only blocked `escalation.a2a` and `traycer.command`. A cloned repo could still set `gate.enabled: false`, `gate.mode: "shadow"`, drop tools, raise thresholds, set `timeoutMs: 1` (every call times out and fails open), pick `traycer.parentAgentId`, or point `apiKeyFile` at any local file to send its contents as a credential. `restrictProject` in `src/config.ts` now makes credentials and escalation destinations global-only and lets a project file tighten the gate but not loosen it. A global key override is also not sent when a project switches the model to another provider.
+
+Decision: the classifier itself still receives raw (elided) arguments, as upstream does. Scrubbing those would hide exactly what the gate needs to judge exfiltration. Only the orchestrator path is scrubbed.
+
+Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. The output judge's `output.*` keys stay project-overridable, since it never blocks.
+
+Tests: 113 pass (16 added). Typecheck and lint are clean.
+
+Pick up here: live test on this machine. It needs classifier credentials, because `~/.pi/agent/auth.json` has none for typesafe/openrouter/cloudflare yet. Run `/login openrouter` or set `TYPESAFE_API_KEY`, install with `pi install git:github.com/KHAEntertainment/pi-jev2`, then try shadow mode, then enforce.
+
+---
+
 ## 2026-10-13: cloud session 1, review round on KHAEntertainment/pi-jev2#1
 
 CodeRabbit raised six findings. All were verified against the code, and all six are fixed:
