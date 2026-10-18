@@ -144,6 +144,7 @@ describe("escalate mode", () => {
 		expect(sent).not.toContain("sk-live-abcdef0123456789xyz");
 		expect(sent).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123");
 		expect(JSON.parse(sent).arguments.command).toContain("https://api.example.com");
+		expect(JSON.parse(sent).redacted).toBe(true);
 	});
 
 	test("pi-rpc parent denies: blocked with the parent's reason", async () => {

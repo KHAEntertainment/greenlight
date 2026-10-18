@@ -35,6 +35,12 @@ export interface EscalationRequest {
 	/** Free text the agent attached (jev_escalate), or the user's last request. */
 	question?: string;
 	userRequest?: string;
+	/**
+	 * Set when credentials were replaced with `[redacted]` before sending.
+	 * Only literal values are ever redacted, never shell code, but an
+	 * orchestrator may still deny a request it cannot see in full.
+	 */
+	redacted?: true;
 	cwd: string;
 	at: number;
 }
@@ -302,26 +308,49 @@ export const REDACTED = "[redacted]";
 const SECRET_KEY = /pass(word|wd|phrase)?$|secret|token|api[-_]?key|auth(orization)?$|cookie|credential|private[-_]?key/i;
 
 /**
+ * A value is only redacted when it is a literal. Anything that can run or
+ * expand (`$(...)`, backticks, `${VAR}`, pipes, redirects, `;`, `&`) stays
+ * visible: hiding it would let an orchestrator approve code it never saw.
+ */
+const NOT_LITERAL = /[$`(){}<>|;&\\]/;
+
+function literal(value: string): string {
+	return NOT_LITERAL.test(value) ? value : REDACTED;
+}
+
+/**
  * Credential shapes that show up in tool arguments: auth headers, `NAME=value`
  * assignments, URL userinfo, PEM blocks, and well-known key prefixes. Each
  * replacement keeps the name so the orchestrator still sees what is used.
+ * Patterns that match free text redact only literal values (see `literal`);
+ * the fixed-alphabet patterns (key prefixes, JWTs, bearer tokens) cannot
+ * contain shell syntax to begin with.
  */
 const SECRET_PATTERNS: ReadonlyArray<(text: string) => string> = [
-	(text) => text.replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY-----|$)/g, REDACTED),
+	// Only a complete block: an unterminated BEGIN must not swallow the rest.
+	(text) => text.replace(/-----BEGIN ([A-Z ]*)PRIVATE KEY-----[A-Za-z0-9+/=:\s-]*?-----END \1PRIVATE KEY-----/g, REDACTED),
 	(text) =>
 		text.replace(
 			/\b((?:proxy-)?authorization|x-api-key|api-key|cookie)(\s*[:=]\s*)(?:(bearer|basic|token)\s+)?("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
-			(_match, name: string, sep: string, scheme: string | undefined) =>
-				`${name}${sep}${scheme ? `${scheme} ` : ""}${REDACTED}`,
+			(match, name: string, sep: string, scheme: string | undefined, value: string) =>
+				NOT_LITERAL.test(value) ? match : `${name}${sep}${scheme ? `${scheme} ` : ""}${REDACTED}`,
 		),
 	(text) => text.replace(/\b(bearer|basic)\s+(?!\[redacted\])[A-Za-z0-9._~+/=-]{8,}/gi, `$1 ${REDACTED}`),
 	(text) =>
 		text.replace(
 			/\b([A-Za-z0-9_]*(?:pass(?:word|wd)?|secret|token|api[-_]?key|access[-_]?key|private[-_]?key|credential)[A-Za-z0-9_]*)(["']?\s*[=:]\s*)(?!\[redacted\])("[^"\n]*"|'[^'\n]*'|[^\s"',;]+)/gi,
-			`$1$2${REDACTED}`,
+			(_match, name: string, sep: string, value: string) => `${name}${sep}${literal(value)}`,
 		),
-	(text) => text.replace(/(--?(?:pass(?:word)?|token|secret|api[-_]?key))([ =])("[^"\n]*"|'[^'\n]*'|\S+)/gi, `$1$2${REDACTED}`),
-	(text) => text.replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)[^\s@/]+@/gi, `$1${REDACTED}@`),
+	(text) =>
+		text.replace(
+			/(--?(?:pass(?:word)?|token|secret|api[-_]?key))([ =])("[^"\n]*"|'[^'\n]*'|\S+)/gi,
+			(_match, flag: string, sep: string, value: string) => `${flag}${sep}${literal(value)}`,
+		),
+	(text) =>
+		text.replace(
+			/(\b[a-z][a-z0-9+.-]*:\/\/[^\s:/@]+:)([^\s@/]+)@/gi,
+			(_match, prefix: string, value: string) => `${prefix}${literal(value)}@`,
+		),
 	(text) =>
 		text.replace(
 			/\b(sk-(?:ant-|proj-|or-)?[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|glpat-[A-Za-z0-9_-]{20,}|xox[abposr]-[A-Za-z0-9-]{10,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|npm_[A-Za-z0-9]{36})\b/g,
@@ -335,8 +364,8 @@ const SECRET_PATTERNS: ReadonlyArray<(text: string) => string> = [
  * The request goes to another agent, a CLI's argv, or a remote A2A server, so
  * a token in a `curl -H` or an `export` must not travel with it. `known`
  * replaces secrets this process has already seen (the classifier key, the
- * orchestrator token). Over-redaction is fine: the orchestrator judges intent,
- * not the literal credential.
+ * orchestrator token). Over-redaction of literals is fine: the orchestrator
+ * judges intent, not the credential. Code is never hidden (see `literal`).
  */
 export function scrubSecrets<T>(value: T, known: (text: string) => string = (text) => text): T {
 	return scrub(value, known, 0) as T;
@@ -348,13 +377,15 @@ function scrub(value: unknown, known: (text: string) => string, depth: number): 
 		for (const pattern of SECRET_PATTERNS) out = pattern(out);
 		return out;
 	}
-	if (depth > 8 || typeof value !== "object" || value === null) return value;
+	if (typeof value !== "object" || value === null) return value;
+	// Past the depth limit nothing is inspected, so nothing is sent raw.
+	if (depth > 8) return REDACTED;
 	if (Array.isArray(value)) return value.map((item) => scrub(item, known, depth + 1));
 	const out: Record<string, unknown> = {};
 	for (const [key, item] of Object.entries(value)) {
 		out[key] =
 			typeof item === "string" && item.length > 0 && SECRET_KEY.test(key)
-				? REDACTED
+				? literal(item)
 				: scrub(item, known, depth + 1);
 	}
 	return out;

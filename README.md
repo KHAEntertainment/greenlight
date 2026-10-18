@@ -186,9 +186,8 @@ For decisions that should come back typed rather than written:
 
 A project file comes with the repository, so it is not trusted to weaken your settings. It can tighten the gate but not loosen it:
 
-- **Global only:** `apiKey`, `apiKeyFile`, `escalation.transport`, `escalation.a2a`, `escalation.traycer`.
-- **Tighten only:** a project file may turn the gate on, move `gate.mode` off `shadow` (but not change an `enforce` or `escalate` set globally), add to `gate.tools` (not remove), lower `gate.blockOn` thresholds and `gate.minConfidence`, set `gate.blockWithoutUI: true`, and raise `gate.argumentChars`, `timeoutMs` and `retries`. A value that loosens any of these is ignored with a warning.
-- **Key binding:** a global `apiKey`/`apiKeyFile` belongs to the global model's provider. If a project file sets a `model` on another provider, the key is not sent and pi resolves that provider's own credentials.
+- **Global only:** `model`, `apiKey`, `apiKeyFile`, `escalation.transport`, `escalation.a2a`, `escalation.traycer`. A repo-chosen model could be one that never flags, and a global key override would follow it to another provider.
+- **Tighten only:** a project file may turn the gate or the output judge on, move `gate.mode` off `shadow` (but not change an `enforce` or `escalate` set globally), add to `gate.tools` and `output.tools` (not remove), lower `gate.blockOn` thresholds, `gate.minConfidence`, `output.leakThreshold`, `output.minConfidence` and `gate.cacheSeconds`, set `gate.blockWithoutUI: true`, and raise `gate.argumentChars`, `output.outputChars`, `timeoutMs` and `retries`. A value that loosens any of these is ignored with a warning.
 
 ```json
 {
@@ -258,7 +257,7 @@ The gate sends the working directory, the tool name, the last user message (firs
 
 Any string field longer than `gate.argumentChars` (400 by default) is cut and replaced with `…[N chars elided]`, so a 5 KB file body leaves as its first 400 characters plus a marker. Output is cut the same way at `output.outputChars` (2000 by default). The omitted text never leaves the machine. Set `gate.tools` to `["bash"]` in the global file to keep file content out of the gate request entirely, or lower either limit.
 
-In escalate mode the same elided request, with the verdict, goes to the orchestrator: the Traycer host, the A2A URL, or the parent process over stdin and stdout. Before it leaves, credentials are scrubbed from every string in it and replaced with `[redacted]`: `Authorization`/`X-Api-Key`/`Cookie` headers, `Bearer`/`Basic` tokens, `NAME=value` assignments whose name mentions a key, token, secret or password, `--password`/`--token` flags, URL userinfo, PEM private keys, JWTs, well-known key prefixes (`sk-`, `ghp_`, `github_pat_`, `glpat-`, `xox?-`, `AKIA`, `AIza`, `npm_`), the values of object keys named like a credential, and the extension's own classifier key and orchestrator token. The scrub is pattern based, so treat it as a backstop, not a guarantee.
+In escalate mode the same elided request, with the verdict, goes to the orchestrator: the Traycer host, the A2A URL, or the parent process over stdin and stdout. Before it leaves, credentials are scrubbed from every string in it and replaced with `[redacted]`: `Authorization`/`X-Api-Key`/`Cookie` headers, `Bearer`/`Basic` tokens, `NAME=value` assignments whose name mentions a key, token, secret or password, `--password`/`--token` flags, URL userinfo, PEM private keys, JWTs, well-known key prefixes (`sk-`, `ghp_`, `github_pat_`, `glpat-`, `xox?-`, `AKIA`, `AIza`, `npm_`), the values of object keys named like a credential, and the extension's own classifier key and orchestrator token. Only literal values are redacted: a value with shell syntax in it (`$(…)`, backticks, `${…}`, pipes, redirects, `;`, `&`) is sent as is, so the orchestrator never approves code it could not see. A request that had anything redacted carries `"redacted": true`. The scrub is pattern based, so treat it as a backstop, not a guarantee.
 
 Credentials are attached by pi's runtime. Notification text is scrubbed of any key or token the extension has handled before it reaches the session transcript.
 

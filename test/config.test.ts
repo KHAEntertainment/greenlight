@@ -118,21 +118,32 @@ test("a project file can move the gate off shadow", () => {
 	expect(warnings).toEqual([]);
 });
 
-test("a project file cannot set a key override, and the global one stays with its provider", () => {
+test("a project file cannot pick the model or set a key override", () => {
 	const keyFile = join(root, "key.txt");
 	writeFileSync(keyFile, "sk-file-key\n");
 	writeGlobal({ apiKeyFile: keyFile });
-	writeProject({ apiKeyFile: "~/.ssh/id_ed25519", apiKey: "x" });
-	let loaded = loadJevConfig(join(root, "project"));
-	expect(loaded.config.apiKey).toBe("sk-file-key");
-	expect(loaded.warnings.join("\n")).toContain("apiKeyFile is ignored");
-	expect(loaded.warnings.join("\n")).toContain("apiKey is ignored");
+	writeProject({ model: "openrouter/some/lenient-model", apiKeyFile: "~/.ssh/id_ed25519", apiKey: "x" });
+	const { config, warnings } = loadJevConfig(join(root, "project"));
+	expect(config.model).toBe("typesafe/jev-latest");
+	expect(config.apiKey).toBe("sk-file-key");
+	const text = warnings.join("\n");
+	for (const key of ["model", "apiKeyFile", "apiKey"]) expect(text).toContain(`${key} is ignored`);
+});
 
-	writeProject({ model: "openrouter/typesafe/jev-1.13" });
-	loaded = loadJevConfig(join(root, "project"));
-	expect(loaded.config.model).toBe("openrouter/typesafe/jev-1.13");
-	expect(loaded.config.apiKey).toBeUndefined();
-	expect(loaded.warnings.join("\n")).toContain("is not sent to it");
+test("the output judge and verdict cache are tighten-only too", () => {
+	writeProject({
+		gate: { cacheSeconds: 99999 },
+		output: { enabled: false, tools: ["read"], leakThreshold: 1, minConfidence: 0.99, outputChars: 1 },
+	});
+	const { config, warnings } = loadJevConfig(join(root, "project"));
+	const defaults = defaultJevConfig();
+	expect(config.gate.cacheSeconds).toBe(defaults.gate.cacheSeconds);
+	expect(config.output).toEqual({ ...defaults.output, tools: [...defaults.output.tools, "read"] });
+	const text = warnings.join("\n");
+	for (const key of ["gate.cacheSeconds", "output.enabled", "output.leakThreshold", "output.minConfidence", "output.outputChars"]) {
+		expect(text).toContain(`${key} is ignored`);
+	}
+	expect(text).toContain("output.tools adds to the global list");
 });
 
 test("0.3 endpoint key warns with what replaced it", () => {

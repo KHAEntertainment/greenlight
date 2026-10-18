@@ -220,15 +220,7 @@ export function loadJevConfig(cwd: string): LoadedJevConfig {
 	const spec = parseModelSpec(config.model);
 	config.model = `${spec.provider}/${spec.id}`;
 
-	let key = resolveApiKey(config, warnings);
-	// The key override was written for the global model's provider. A project
-	// that picks another provider must not receive it.
-	if (key && project.model && parseModelSpec(base.model).provider !== spec.provider) {
-		key = undefined;
-		warnings.push(
-			`project pi-jev.json: model ${config.model} uses another provider than the global model, so the global apiKey/apiKeyFile is not sent to it`,
-		);
-	}
+	const key = resolveApiKey(config, warnings);
 	return { config: { ...config, apiKey: key }, warnings };
 }
 
@@ -404,15 +396,17 @@ function readConfigFile(path: string, warnings: string[]): ParsedConfigFile {
  * A repository's own `.pi/pi-jev.json` is untrusted: cloning a repo must not
  * weaken the user's gate or choose where secrets and escalations go.
  *
- * - Global only: `apiKey`/`apiKeyFile` (a file path read and sent as a
+ * - Global only: `model` (an uncalibrated or lenient classifier would pass
+ *   everything, and the global key override would follow it to another
+ *   provider), `apiKey`/`apiKeyFile` (a file path read and sent as a
  *   credential), `escalation.transport`, `escalation.a2a` (a URL plus a local
  *   token would reach a server that can then approve flagged calls) and
  *   `escalation.traycer` (the command is executed; the parent agent decides).
- * - Tighten only, against defaults plus the global file: the gate can be
- *   turned on, moved off `shadow`, given more tools, lower thresholds, a
- *   lower `minConfidence`, `blockWithoutUI`, more argument context and a
- *   longer timeout. A value that loosens any of these is ignored with a
- *   warning.
+ * - Tighten only, against defaults plus the global file: the gate and the
+ *   output judge can be turned on and given more tools, the gate moved off
+ *   `shadow`, thresholds and `minConfidence` lowered, `blockWithoutUI` set,
+ *   argument context, timeout and retries raised, and the verdict cache
+ *   shortened. A value that loosens any of these is ignored with a warning.
  */
 function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: string[]): void {
 	const ignore = (key: string, why: string) =>
@@ -421,6 +415,10 @@ function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: s
 	const looser = (current: unknown) =>
 		`a project file can only tighten the gate (current: ${JSON.stringify(current)})`;
 
+	if (project.model !== undefined) {
+		delete project.model;
+		ignore("model", globalOnly);
+	}
 	if (project.apiKey !== undefined) {
 		delete project.apiKey;
 		ignore("apiKey", globalOnly);
@@ -447,8 +445,33 @@ function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: s
 		}
 	}
 
+	const output = project.output;
+	if (output) {
+		if (output.enabled === false && base.output.enabled) {
+			delete output.enabled;
+			ignore("output.enabled", looser(true));
+		}
+		if (output.tools) output.tools = unionTools("output.tools", base.output.tools, output.tools, warnings);
+		if (output.leakThreshold !== undefined && output.leakThreshold > base.output.leakThreshold) {
+			delete output.leakThreshold;
+			ignore("output.leakThreshold", looser(base.output.leakThreshold));
+		}
+		if (output.minConfidence !== undefined && output.minConfidence > base.output.minConfidence) {
+			delete output.minConfidence;
+			ignore("output.minConfidence", looser(base.output.minConfidence));
+		}
+		if (output.outputChars !== undefined && output.outputChars < base.output.outputChars) {
+			delete output.outputChars;
+			ignore("output.outputChars", looser(base.output.outputChars));
+		}
+	}
+
 	const gate = project.gate;
 	if (!gate) return;
+	if (gate.cacheSeconds !== undefined && gate.cacheSeconds > base.gate.cacheSeconds) {
+		delete gate.cacheSeconds;
+		ignore("gate.cacheSeconds", looser(base.gate.cacheSeconds));
+	}
 	if (gate.enabled === false && base.gate.enabled) {
 		delete gate.enabled;
 		ignore("gate.enabled", looser(true));
@@ -469,16 +492,7 @@ function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: s
 		delete gate.argumentChars;
 		ignore("gate.argumentChars", looser(base.gate.argumentChars));
 	}
-	if (gate.tools) {
-		const requested = gate.tools;
-		const kept = base.gate.tools.filter((tool) => !requested.includes(tool));
-		gate.tools = [...new Set([...base.gate.tools, ...requested])];
-		if (kept.length > 0) {
-			warnings.push(
-				`project pi-jev.json: gate.tools adds to the global list and cannot remove from it; still judged: ${kept.join(", ")}`,
-			);
-		}
-	}
+	if (gate.tools) gate.tools = unionTools("gate.tools", base.gate.tools, gate.tools, warnings);
 	if (gate.blockOn) {
 		for (const key of Object.keys(gate.blockOn) as (keyof GateThresholds)[]) {
 			const value = gate.blockOn[key];
@@ -488,6 +502,17 @@ function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: s
 			}
 		}
 	}
+}
+
+/** A project tool list adds to the global one; it cannot remove from it. */
+function unionTools(key: string, base: string[], requested: string[], warnings: string[]): string[] {
+	const kept = base.filter((tool) => !requested.includes(tool));
+	if (kept.length > 0) {
+		warnings.push(
+			`project pi-jev.json: ${key} adds to the global list and cannot remove from it; still judged: ${kept.join(", ")}`,
+		);
+	}
+	return [...new Set([...base, ...requested])];
 }
 
 /** Keys 0.3 understood, with what replaced them. */

