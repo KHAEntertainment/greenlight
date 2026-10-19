@@ -97,10 +97,17 @@ export interface ReplyInbox {
  * `Agent message from <title> (agent <id>) [harness]`. The title is the
  * sender's to choose, so the id is the last `(agent …)` before the harness.
  */
-const HEADER = /^Agent message from .*\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\) \[[^\]]+\]\s*$/;
+const HEADER = /^Agent message from .*\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\) \[[^\]\n]+\]\s*$/;
 
-function headerSender(text: string): string | undefined {
-	return HEADER.exec(text.split("\n", 1)[0] ?? "")?.[1];
+/**
+ * The sender named by the header; null when the message is from an agent but
+ * the header does not parse, so the caller fails closed; undefined when the
+ * message has no agent header at all (typed by the local user).
+ */
+function headerSender(text: string): string | null | undefined {
+	const first = text.split("\n", 1)[0] ?? "";
+	if (!first.startsWith("Agent message from ")) return undefined;
+	return HEADER.exec(first)?.[1] ?? null;
 }
 
 export function createReplyInbox(): ReplyInbox {
@@ -125,6 +132,7 @@ export function createReplyInbox(): ReplyInbox {
 		offer(text) {
 			if (waiting.size === 0) return false;
 			const sender = headerSender(text);
+			if (sender === null) return false;
 			const body = extractJsonObject(text);
 			const id = body ? (findString(body, ["id", "requestId", "request_id"], 0) ?? undefined) : undefined;
 			// The request id is shared only with the parent, so it names the
