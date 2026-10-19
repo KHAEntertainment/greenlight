@@ -10,20 +10,27 @@
  *   traycer agent inbox [--after <cursor>] --json
  *     -> NDJSON result with the messages addressed to this agent
  *
- * The reply to an --expect-reply message comes back to this agent's inbox
- * carrying the same responseId, so the escalator sends once and polls the
- * inbox for that id. The managing agent sees the message as
- * `[traycer:agent-message]` text and answers with its `traycer_send_message`
- * tool, so the message is written for an LLM reader and asks for JSON back.
+ * The managing agent sees the message as `[traycer:agent-message]` text and
+ * answers with its `traycer_send_message` tool, so the message is written for
+ * an LLM reader and asks for JSON back, carrying the request id.
  *
- * UNVERIFIED (needs a local Traycer session; see docs/SESSION-NOTES.md):
- *   - the exact field names in the `send` and `inbox` result lines; the
- *     parsers here search the result object for them rather than assume a path
- *   - how the parent id is exposed by `traycer agent list --json`
+ * Where the answer lands (verified on Traycer 1.5.1, docs/SESSION-NOTES.md):
+ * Traycer delivers a reply into this agent's conversation as a new prompt,
+ * even while the gated tool call is still waiting. The CLI inbox is only a
+ * recovery buffer: it can be empty, and its entries carry no responseId. So
+ * the main path is `ReplyInbox`: the extension's `input` handler offers each
+ * incoming message to it, and a matching decision resolves the wait and is
+ * consumed before the model sees it. Polling the inbox for the responseId
+ * stays as a second path for hosts that keep replies there.
+ *
+ * Verified shapes: `agent list --json` is `{type:"result", data:{agents:[{id,
+ * parentId, isSelf, …}]}}`; `agent inbox --json` is `{type:"result",
+ * data:{messages:[…], nextCursor:{createdAt, eventId} | null}}`.
  */
 
 import {
 	EscalationError,
+	extractJsonObject,
 	pollUntil,
 	type EscalationDecision,
 	type EscalationRequest,
@@ -50,7 +57,89 @@ export interface TraycerOptions {
 	parentAgentId: string | undefined;
 	pollMs: number;
 	env: Record<string, string | undefined>;
+	/** Decisions delivered as chat input (see `createReplyInbox`). */
+	replies?: ReplyInbox;
 	now?: () => number;
+}
+
+interface PendingReply {
+	requestId: string;
+	from: string;
+	onEscalated?: (decision: EscalationDecision) => void;
+	resolve: (decision: FinalDecision) => void;
+}
+
+type FinalDecision = EscalationDecision & { decision: "approve" | "deny" };
+
+/**
+ * Decisions that reach this agent as chat input instead of through the CLI.
+ * One per extension instance; the escalator registers what it waits for and
+ * the `input` handler offers every incoming message while anything is pending.
+ */
+export interface ReplyInbox {
+	/** Wait for the decision on `requestId` from agent `from`. */
+	expect(
+		requestId: string,
+		from: string,
+		onEscalated?: (decision: EscalationDecision) => void,
+	): { promise: Promise<FinalDecision>; cancel(): void };
+	/**
+	 * Offer one incoming message. True when it answered a pending request, so
+	 * the caller consumes it: the decision is the gate's to act on, and the
+	 * model must not read an approval it did not get.
+	 */
+	offer(text: string): boolean;
+	readonly pending: number;
+}
+
+/** Traycer's prompt header names the sender: `… (agent <id>) [harness]`. */
+const SENDER = /\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\)/;
+
+export function createReplyInbox(): ReplyInbox {
+	const waiting = new Map<string, PendingReply>();
+	return {
+		get pending() {
+			return waiting.size;
+		},
+		expect(requestId, from, onEscalated) {
+			let entry: PendingReply | undefined;
+			const promise = new Promise<FinalDecision>((resolve) => {
+				entry = { requestId, from, onEscalated, resolve };
+				waiting.set(requestId, entry);
+			});
+			return {
+				promise,
+				cancel: () => {
+					if (waiting.get(requestId) === entry) waiting.delete(requestId);
+				},
+			};
+		},
+		offer(text) {
+			if (waiting.size === 0) return false;
+			const sender = SENDER.exec(text)?.[1];
+			const body = extractJsonObject(text);
+			const id = body ? (findString(body, ["id", "requestId", "request_id"], 0) ?? undefined) : undefined;
+			// The request id is shared only with the parent, so it names the
+			// request. Without one, accept a reply only when its header names
+			// the parent and exactly one request is waiting on that parent.
+			let entry = id ? waiting.get(id) : undefined;
+			if (!entry && !id && sender) {
+				const candidates = [...waiting.values()].filter((pending) => pending.from === sender);
+				if (candidates.length === 1) entry = candidates[0];
+			}
+			if (!entry) return false;
+			if (sender && sender !== entry.from) return false;
+			const decision = parseDecision(body ?? text);
+			if (!decision) return false;
+			if (decision.decision === "escalate") {
+				entry.onEscalated?.(decision);
+				return true;
+			}
+			waiting.delete(entry.requestId);
+			entry.resolve({ ...decision, decision: decision.decision, by: decision.by ?? entry.from });
+			return true;
+		},
+	};
 }
 
 const CLI_TIMEOUT_MS = 30_000;
@@ -93,19 +182,48 @@ export function traycerEscalator(exec: Exec, options: TraycerOptions): Escalator
 			}
 			const to = await parentId(wait.signal);
 			// Read the cursor first so a stale reply in the inbox cannot answer us.
-			let cursor = inboxCursor(await run(["agent", "inbox"], wait.signal));
+			// With chat replies as the main path, an unreadable inbox only loses
+			// the backup path, so it does not stop the escalation.
+			let cursor = inboxCursor(
+				await run(["agent", "inbox"], wait.signal).catch((error: unknown) => {
+					if (options.replies) return [];
+					throw error;
+				}),
+			);
 			const sent = await run(
 				["agent", "send", "--to", to, "--message", traycerMessage(req, self), "--expect-reply"],
 				wait.signal,
 			);
 			const responseId = findString(resultOf(sent), ["responseId", "response_id"]);
-			if (!responseId) throw new EscalationError("traycer send returned no responseId");
+			if (!responseId && !options.replies) {
+				throw new EscalationError("traycer send returned no responseId");
+			}
 
-			return pollUntil(
+			// Stops the inbox poll once a reply arrives as chat input. `deadline`
+			// is read through, because onEscalated moves it on the shared wait.
+			const stop = new AbortController();
+			const pollWait: EscalationWait = {
+				get deadline() {
+					return wait.deadline;
+				},
+				signal: wait.signal ? AbortSignal.any([wait.signal, stop.signal]) : stop.signal,
+				onEscalated: wait.onEscalated,
+			};
+			const viaInput = options.replies?.expect(req.id, to, wait.onEscalated);
+			const viaInbox = pollUntil(
 				async () => {
+					if (!responseId) return undefined;
 					const args = ["agent", "inbox"];
 					if (cursor) args.push("--after", cursor);
-					const lines = await run(args, wait.signal);
+					let lines: unknown[];
+					try {
+						lines = await run(args, pollWait.signal);
+					} catch (error) {
+						// With chat replies as the main path, a failing inbox read is
+						// not the end of the wait: keep waiting until the deadline.
+						if (options.replies && !pollWait.signal?.aborted) return undefined;
+						throw error;
+					}
 					cursor = inboxCursor(lines) ?? cursor;
 					for (const message of inboxMessages(lines)) {
 						if (findString(message, ["responseId", "response_id"]) !== responseId) continue;
@@ -118,13 +236,19 @@ export function traycerEscalator(exec: Exec, options: TraycerOptions): Escalator
 						return {
 							...decision,
 							decision: decision.decision,
-							by: decision.by ?? findString(message, ["senderAgentId", "sender", "from"]) ?? to,
-						} as EscalationDecision & { decision: "approve" | "deny" };
+							by: decision.by ?? findString(message, ["senderAgentId", "fromAgentId", "sender", "from"]) ?? to,
+						} as FinalDecision;
 					}
 					return undefined;
 				},
-				{ intervalMs: options.pollMs, wait, now },
+				{ intervalMs: options.pollMs, wait: pollWait, now },
 			);
+			try {
+				return await (viaInput ? Promise.race([viaInbox, viaInput.promise]) : viaInbox);
+			} finally {
+				viaInput?.cancel();
+				stop.abort();
+			}
 		},
 	};
 }
@@ -137,7 +261,7 @@ export function traycerMessage(req: EscalationRequest, self: string): string {
 	return [
 		`[pi-jev escalation] Agent ${self} is paused: ${what}`,
 		"It will not continue until you reply to this message.",
-		'Reply with JSON: {"decision":"approve"|"deny"|"escalate","reason":"<one line>"}.',
+		`Reply on this thread with JSON: {"id":"${req.id}","decision":"approve"|"deny"|"escalate","reason":"<one line>"}.`,
 		'Use "escalate" if a human should decide; then send the final approve/deny when they have.',
 		"",
 		"Request:",
@@ -186,8 +310,33 @@ function inboxMessages(lines: unknown[]): object[] {
 	return out;
 }
 
-function inboxCursor(lines: unknown[]): string | undefined {
-	return findString(resultOf(lines), ["nextCursor", "next_cursor", "cursor"], 2);
+/** The next-page cursor, as `--after` takes it: a string, or `createdAt:eventId`. */
+export function inboxCursor(lines: unknown[]): string | undefined {
+	const found = findValue(resultOf(lines), ["nextCursor", "next_cursor", "cursor"], 2);
+	if (typeof found === "string" && found) return found;
+	if (typeof found === "object" && found !== null) {
+		const createdAt = Reflect.get(found, "createdAt");
+		const eventId = Reflect.get(found, "eventId");
+		if ((typeof createdAt === "number" || typeof createdAt === "string") && typeof eventId === "string") {
+			return `${createdAt}:${eventId}`;
+		}
+	}
+	return undefined;
+}
+
+function findValue(value: unknown, keys: string[], depth: number): unknown {
+	if (typeof value !== "object" || value === null) return undefined;
+	for (const key of keys) {
+		const found = Reflect.get(value, key);
+		if (found !== undefined && found !== null) return found;
+	}
+	if (depth <= 0) return undefined;
+	for (const item of Object.values(value)) {
+		if (typeof item !== "object" || item === null || Array.isArray(item)) continue;
+		const found = findValue(item, keys, depth - 1);
+		if (found !== undefined) return found;
+	}
+	return undefined;
 }
 
 function messageText(message: object): string {

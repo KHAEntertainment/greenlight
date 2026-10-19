@@ -42,7 +42,7 @@ import {
 } from "./escalation";
 import { a2aEscalator } from "./escalators/a2a";
 import { piRpcEscalator } from "./escalators/pi-rpc";
-import { traycerEscalator } from "./escalators/traycer";
+import { createReplyInbox, traycerEscalator } from "./escalators/traycer";
 import {
 	buildGateState,
 	describeAnswers,
@@ -194,6 +194,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	let lastErrorAt = 0;
 	const warnedOnce = new Set<string>();
 
+	/** Traycer delivers the parent's decision as chat input; see `createReplyInbox`. */
+	const traycerReplies = createReplyInbox();
+
 	function reload(cwd: string): void {
 		loaded = loadJevConfig(cwd);
 		config = loaded.config;
@@ -286,6 +289,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 						parentAgentId: config.escalation.traycer.parentAgentId,
 						pollMs: config.escalation.pollMs,
 						env: process.env,
+						replies: traycerReplies,
 					},
 				);
 			case "a2a": {
@@ -359,6 +363,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 		ctx.ui.setStatus(STATUS_KEY, statusText());
 	});
+
+	// A decision on a pending escalation is the gate's, not the model's: consume it.
+	pi.on("input", (event) => (traycerReplies.offer(event.text) ? { action: "handled" } : { action: "continue" }));
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!gateOn || inactive) return;

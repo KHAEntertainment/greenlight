@@ -6,6 +6,27 @@ where to pick up. Append a new entry when you stop.
 
 ---
 
+## 2026-10-19: local session 1, Traycer replies arrive as chat input
+
+Asked: "fix it", after a live Traycer probe showed the escalation reaching the parent but the parent's deny never reaching the gate.
+
+**What the live probe showed (Traycer 1.5.1).** A Pi child agent in the sandbox ran `rm -rf src && git push --force origin main` in escalate mode. The gate flagged it (destructive 0.97, impact 2.86/3) and the escalation reached the parent agent. The parent replied deny with the `responseId`. The child's tool result was `(declined)`, the local confirm fallback, because:
+- Traycer delivers a reply into the child's conversation as a new prompt, headed `Agent message from <title> (agent <id>) [harness]`.
+- `traycer agent inbox` is only a recovery buffer: it was empty for the child, and its entries carry no `responseId`.
+- `nextCursor` is an object `{createdAt, eventId}`, not a string, so the old cursor parse never advanced.
+
+**Fix.** `createReplyInbox` in `src/escalators/traycer.ts`, one per extension instance (`src/index.ts`). The escalator registers the request it waits on; a `pi.on("input")` handler offers each incoming message, and a match resolves the wait and returns `{action: "handled"}`, so the model never sees the decision. A match is the request `id` in the reply JSON (the request message now asks for it), or, with no id, Traycer's header naming the parent while exactly one request waits on it. A header naming another agent is rejected, so the agent cannot answer itself through `traycer agent send`. `escalate` extends the wait as before. The inbox poll stays as a backup and is raced against the input path; an inbox read error no longer ends the wait when the input path exists. The object cursor becomes `--after createdAt:eventId`.
+
+**Not verified yet:** that Traycer delivers the reply mid-run (as a pi steer input) rather than after the turn ends. The transcript order suggests mid-run. If it arrives after the turn, the gate has already timed out and failed open to the enforce rule.
+
+**Test note:** `bun test` inside a Traycer agent's shell fails the three `test/e2e/rpc.test.ts` cases, because the inherited `TRAYCER_*` variables route escalation to Traycer instead of the RPC parent. Run the suite with those two variables unset.
+
+Tests: 148 pass (7 added). Typecheck and lint are clean.
+
+Pick up here: point the sandbox at `claude/traycer-reply-via-input`, start a fresh Traycer Pi child, and repeat the deny probe, then an approve probe.
+
+---
+
 ## 2026-10-19: local session 1, built-in Jev definitions for a catalog gap
 
 PR #1 is merged (12db2a5). Local testing started in a separate sandbox project, `../pi-jev2-sandbox`. The package is installed there with `pi install -l`, so the user's global pi packages are unchanged.

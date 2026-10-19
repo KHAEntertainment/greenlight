@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { EscalationWait } from "../src/escalation";
 import { a2aEscalator, decisionFromTask, normalizeState } from "../src/escalators/a2a";
 import { piRpcEscalator, readChildEscalation, relayChildEscalation, RPC_ESCALATION_TITLE } from "../src/escalators/pi-rpc";
-import { parseNdjson, traycerEscalator, type Exec } from "../src/escalators/traycer";
+import { createReplyInbox, inboxCursor, parseNdjson, traycerEscalator, type Exec } from "../src/escalators/traycer";
 import { sampleRequest } from "./escalation.test";
 
 function wait(ms = 2000, extra: Partial<EscalationWait> = {}): EscalationWait {
@@ -120,6 +120,92 @@ describe("traycer", () => {
 	test("times out when no reply arrives", async () => {
 		const { exec } = cli([]);
 		await expect(traycerEscalator(exec, { command: "traycer", parentAgentId: "x", pollMs: 5, env }).request(sampleRequest(), wait(40))).rejects.toThrow("timed out");
+	});
+
+	const header = (from: string) => `Agent message from Lead (agent ${from}) [claude]\nNo reply required.\n\n`;
+
+	test("a reply delivered as chat input resolves the wait and stops the poll", async () => {
+		const { exec, calls } = cli([]);
+		const replies = createReplyInbox();
+		const req = sampleRequest();
+		const pending = traycerEscalator(exec, { command: "traycer", parentAgentId: "lead-1", pollMs: 5, env, replies }).request(req, wait());
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(replies.pending).toBe(1);
+		expect(calls.find((args) => args[1] === "send")?.join(" ")).toContain(`"id":"${req.id}"`);
+		expect(replies.offer(`${header("lead-1")}{"id":"${req.id}","decision":"deny","reason":"no force pushes"}`)).toBe(true);
+		expect(await pending).toEqual({ decision: "deny", reason: "no force pushes", by: "lead-1" });
+		expect(replies.pending).toBe(0);
+		const polls = calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(calls.length).toBe(polls);
+	});
+
+	test("chat input: wrong id, wrong sender, or nothing pending is not consumed", async () => {
+		const replies = createReplyInbox();
+		expect(replies.offer('{"id":"r","decision":"approve"}')).toBe(false);
+		const waiting = replies.expect("req-1", "lead-1");
+		expect(replies.offer(`${header("lead-1")}{"id":"req-2","decision":"approve"}`)).toBe(false);
+		expect(replies.offer(`${header("child-1")}{"id":"req-1","decision":"approve"}`)).toBe(false);
+		expect(replies.offer(`${header("lead-1")}{"id":"req-1","note":"thinking"}`)).toBe(false);
+		expect(replies.offer("please go ahead")).toBe(false);
+		expect(replies.pending).toBe(1);
+		waiting.cancel();
+		expect(replies.pending).toBe(0);
+	});
+
+	test("chat input without an id: the parent's header and one pending request decide", async () => {
+		const replies = createReplyInbox();
+		const one = replies.expect("req-1", "lead-1");
+		expect(replies.offer(`${header("lead-1")}{"decision":"approve","reason":"fine"}`)).toBe(true);
+		expect(await one.promise).toEqual({ decision: "approve", reason: "fine", by: "lead-1" });
+
+		const a = replies.expect("req-a", "lead-1");
+		replies.expect("req-b", "lead-1");
+		expect(replies.offer(`${header("lead-1")}{"decision":"approve"}`)).toBe(false);
+		expect(replies.offer('{"decision":"approve"}')).toBe(false);
+		expect(replies.offer(`${header("lead-1")}{"id":"req-a","decision":"deny"}`)).toBe(true);
+		expect((await a.promise).decision).toBe("deny");
+	});
+
+	test("escalate arrives as chat input, then the final decision", async () => {
+		const { exec } = cli([]);
+		const replies = createReplyInbox();
+		const req = sampleRequest();
+		let escalated = 0;
+		const pending = traycerEscalator(exec, { command: "traycer", parentAgentId: "lead-1", pollMs: 5, env, replies }).request(req, wait(2000, { onEscalated: () => escalated++ }));
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(replies.offer(`${header("lead-1")}{"id":"${req.id}","decision":"escalate"}`)).toBe(true);
+		expect(escalated).toBe(1);
+		expect(replies.pending).toBe(1);
+		expect(replies.offer(`${header("lead-1")}{"id":"${req.id}","decision":"approve","reason":"the user said yes"}`)).toBe(true);
+		expect((await pending).decision).toBe("approve");
+	});
+
+	test("with chat input, a missing responseId or failing inbox read keeps waiting", async () => {
+		for (const [sendResult, minReads] of [
+			['{"type":"result","data":{}}', 1],
+			['{"type":"result","data":{"responseId":"r-1"}}', 2],
+		] as const) {
+			const replies = createReplyInbox();
+			let inboxReads = 0;
+			const exec: Exec = async (_command, args) => {
+				if (args[1] === "send") return { code: 0, stderr: "", stdout: sendResult };
+				inboxReads += 1;
+				return { code: 1, stderr: "inbox unavailable", stdout: "" };
+			};
+			const req = sampleRequest();
+			const pending = traycerEscalator(exec, { command: "traycer", parentAgentId: "lead-1", pollMs: 2, env, replies }).request(req, wait());
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(replies.offer(`${header("lead-1")}{"id":"${req.id}","decision":"approve"}`)).toBe(true);
+			expect((await pending).decision).toBe("approve");
+			expect(inboxReads).toBeGreaterThanOrEqual(minReads);
+		}
+	});
+
+	test("an object nextCursor becomes createdAt:eventId", () => {
+		expect(inboxCursor([{ type: "result", data: { messages: [], nextCursor: { createdAt: 1792451592902, eventId: "ev-7" } } }])).toBe("1792451592902:ev-7");
+		expect(inboxCursor([{ type: "result", data: { messages: [], nextCursor: "c3" } }])).toBe("c3");
+		expect(inboxCursor([{ type: "result", data: { messages: [], nextCursor: null } }])).toBeUndefined();
 	});
 
 	test("parseNdjson skips non-JSON progress", () => {

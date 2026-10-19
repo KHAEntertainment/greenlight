@@ -238,6 +238,29 @@ describe("escalate mode", () => {
 		expect(pi.execCalls.some((c) => c.command === "traycer" && c.args.includes("--to") && c.args.includes("lead-1"))).toBe(true);
 	});
 
+	test("Traycer reply delivered as chat input is consumed and denies", async () => {
+		process.env.TRAYCER_AGENT_ID = "child-1";
+		process.env.TRAYCER_EPIC_ID = "epic-1";
+		configure({ gate: { mode: "escalate" }, escalation: { pollMs: 5, traycer: { parentAgentId: "lead-1" } } });
+		let requestId = "";
+		const pi = fakePi(async (_command, args) => {
+			if (args[1] === "send") {
+				requestId = /"id":"([^"]+)"/.exec(args.join(" "))?.[1] ?? "";
+				return { code: 0, stderr: "", stdout: '{"type":"result","data":{"responseId":"r-1"}}' };
+			}
+			return { code: 0, stderr: "", stdout: JSON.stringify({ type: "result", data: { messages: [], nextCursor: null } }) };
+		});
+		const { ctx } = await start(pi, { mode: "tui" });
+		const call = pi.emit("tool_call", destructiveCall, ctx);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(requestId).not.toBe("");
+		expect(await pi.emit("input", { type: "input", text: "unrelated chatter", source: "interactive" }, ctx)).toEqual({ action: "continue" });
+		const text = `Agent message from Lead (agent lead-1) [claude]\nNo reply required.\n\n{"id":"${requestId}","decision":"deny","reason":"ask the user first"}`;
+		expect(await pi.emit("input", { type: "input", text, source: "interactive", streamingBehavior: "steer" }, ctx)).toEqual({ action: "handled" });
+		const result = (await call) as { block: boolean; reason: string };
+		expect(result.reason).toContain("denied by lead-1: ask the user first");
+	});
+
 	test("sibling identical calls share one escalation", async () => {
 		configure({ gate: { mode: "escalate" } });
 		const pi = fakePi();

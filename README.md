@@ -110,13 +110,13 @@ Every escalation is journaled (`/jev log`) with its decision, who made it, the t
 
 | Transport | Chosen when | How |
 |---|---|---|
-| `traycer` | `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID` are set (Traycer sets both on every agent it launches) | `traycer agent send --to <parent> --expect-reply --json`, then polls `traycer agent inbox` for the reply carrying the same `responseId` |
+| `traycer` | `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID` are set (Traycer sets both on every agent it launches) | `traycer agent send --to <parent> --expect-reply --json`, then waits for the parent's reply in this agent's chat input, with `traycer agent inbox` polled for the same `responseId` as a backup |
 | `a2a` | `escalation.a2a.url` is set | A2A v1.0 JSON-RPC: `SendMessage` with `returnImmediately`, then `GetTask` until a decision |
 | `pi-rpc` | pi runs as `pi --mode rpc` (a parent process holds its stdin) | an `input` dialog that the parent answers over pi's extension UI subprotocol |
 
 Set `transport` to one of these to force it, or to `none` to treat escalate as enforce.
 
-**Traycer** has no public A2A endpoint; its agent-to-agent channel is the `traycer` CLI. The managing agent receives a `[traycer:agent-message]` that explains the pause and asks for `{"decision":"approve"|"deny"|"escalate","reason":"..."}` back. The parent is `escalation.traycer.parentAgentId`, else `TRAYCER_PARENT_AGENT_ID`, else this agent's parent in `traycer agent list --json`.
+**Traycer** has no public A2A endpoint; its agent-to-agent channel is the `traycer` CLI. The managing agent receives a `[traycer:agent-message]` that explains the pause and asks for `{"id":"<request id>","decision":"approve"|"deny"|"escalate","reason":"..."}` back. Traycer delivers that reply into this agent's conversation as a new prompt, even while the gated call is waiting. The extension's `input` handler takes it when it carries the request's `id` (or, without one, when Traycer's header names the parent and only one request is waiting on it), resolves the wait, and consumes the message so the model never reads it. A reply whose header names any other agent is ignored. The CLI inbox is polled too, for hosts that keep replies there. The parent is `escalation.traycer.parentAgentId`, else `TRAYCER_PARENT_AGENT_ID`, else this agent's parent in `traycer agent list --json`.
 
 **A2A**: the request rides as a `data` part (schema `pi-jev.escalation/v1`) plus a text summary. A bare origin as `url` is resolved through `/.well-known/agent-card.json`. Task states map like this:
 
