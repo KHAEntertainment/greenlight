@@ -92,8 +92,16 @@ export interface ReplyInbox {
 	readonly pending: number;
 }
 
-/** Traycer's prompt header names the sender: `… (agent <id>) [harness]`. */
-const SENDER = /\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\)/;
+/**
+ * Traycer's prompt header names the sender on the first line:
+ * `Agent message from <title> (agent <id>) [harness]`. The title is the
+ * sender's to choose, so the id is the last `(agent …)` before the harness.
+ */
+const HEADER = /^Agent message from .*\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\) \[[^\]]+\]\s*$/;
+
+function headerSender(text: string): string | undefined {
+	return HEADER.exec(text.split("\n", 1)[0] ?? "")?.[1];
+}
 
 export function createReplyInbox(): ReplyInbox {
 	const waiting = new Map<string, PendingReply>();
@@ -116,12 +124,13 @@ export function createReplyInbox(): ReplyInbox {
 		},
 		offer(text) {
 			if (waiting.size === 0) return false;
-			const sender = SENDER.exec(text)?.[1];
+			const sender = headerSender(text);
 			const body = extractJsonObject(text);
 			const id = body ? (findString(body, ["id", "requestId", "request_id"], 0) ?? undefined) : undefined;
 			// The request id is shared only with the parent, so it names the
 			// request. Without one, accept a reply only when its header names
-			// the parent and exactly one request is waiting on that parent.
+			// the parent and exactly one request is waiting on that parent,
+			// and only to deny or escalate: an approval must name its request.
 			let entry = id ? waiting.get(id) : undefined;
 			if (!entry && !id && sender) {
 				const candidates = [...waiting.values()].filter((pending) => pending.from === sender);
@@ -131,6 +140,7 @@ export function createReplyInbox(): ReplyInbox {
 			if (sender && sender !== entry.from) return false;
 			const decision = parseDecision(body ?? text);
 			if (!decision) return false;
+			if (!id && decision.decision === "approve") return false;
 			if (decision.decision === "escalate") {
 				entry.onEscalated?.(decision);
 				return true;
