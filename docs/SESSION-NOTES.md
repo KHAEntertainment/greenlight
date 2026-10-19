@@ -41,6 +41,16 @@ The model still followed the gate's text and did not retry, and `src/math.ts` st
 
 Tests: 156 pass. Typecheck and lint are clean.
 
+**Probe 8 (agent 1baa8238), verified end to end live:**
+- The gate blocked the call with `asked e6ce83ff… for a decision, request eaf18fab…`, and the agent ended its turn.
+- The parent's deny arrived 4.6 s later as a fresh prompt. It was matched and journaled (`deny, by e6ce83ff…`), and the wait was settled.
+- The model read only `[pi-jev] e6ce83ff… denied the flagged `bash` call: …. Do not retry it`, never the raw JSON, and did not retry.
+
+Not covered live:
+- The gate blocking a retry after a deny: the model complied, so this is covered by unit tests only.
+- The late-queue re-send: this reply did not race, so unit tests only.
+- An approve: the parent's Claude Code auto-mode classifier blocks sending approvals unless the owner adds a permission rule for `traycer_send_message`.
+
 **Probe 7 (agent 276043de, bounded command `rm -rf /tmp/pi-jev-probe-scratch && git push --force origin main`):**
 - Block, bound id and session wait all worked live.
 - The deny was matched and journaled (`decision: deny, by e6ce83ff…`), 5 ms after the run's final message.
@@ -50,7 +60,7 @@ Fix: a note queued during a run is re-sent with `pi.sendUserMessage` on `agent_s
 
 **Probe 5 (agent de7e332f):** no gate test. Its model refused the command, inspected the repo, and noticed it has no remote. Model behavior, not the extension.
 
-Pick up here: reinstall `claude/traycer-reply-via-input` in the sandbox, start a fresh Traycer Pi child, and repeat the deny probe: expect `asked <parent>` first, then `denied by <parent>` on the retry. An approve probe needs a permission rule for `traycer_send_message` in the parent's Claude Code session, because the auto-mode classifier blocked approvals there.
+Pick up here: review and merge PR #2, then PR #3 (stacked). Optional: a live approve probe once a permission rule for `traycer_send_message` is in place. Probe agents b7693128, 1f6007d2, 5cd676ff, 47eebaf3, de7e332f, 578cfb8f, 276043de and 1baa8238 can be archived.
 
 ---
 
