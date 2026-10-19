@@ -405,8 +405,9 @@ function readConfigFile(path: string, warnings: string[]): ParsedConfigFile {
  * - Tighten only, against defaults plus the global file: the gate and the
  *   output judge can be turned on and given more tools, the gate moved off
  *   `shadow`, thresholds and `minConfidence` lowered, `blockWithoutUI` set,
- *   argument context, timeout and retries raised, and the verdict cache
- *   shortened. A value that loosens any of these is ignored with a warning.
+ *   argument context, timeout and retries raised, the verdict cache
+ *   shortened, the escalation timeouts raised and its poll interval lowered.
+ *   A value that loosens any of these is ignored with a warning.
  */
 function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: string[]): void {
 	const ignore = (key: string, why: string) =>
@@ -442,6 +443,19 @@ function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: s
 			if (escalation[key] === undefined) continue;
 			delete escalation[key];
 			ignore(`escalation.${key}`, globalOnly);
+		}
+		// A shorter wait makes the orchestrator time out, and a headless run
+		// then falls back to proceeding: a repo could opt out of escalation.
+		for (const key of ["timeoutSeconds", "humanTimeoutSeconds"] as const) {
+			const value = escalation[key];
+			if (value !== undefined && value < base.escalation[key]) {
+				delete escalation[key];
+				ignore(`escalation.${key}`, looser(base.escalation[key]));
+			}
+		}
+		if (escalation.pollMs !== undefined && escalation.pollMs > base.escalation.pollMs) {
+			delete escalation.pollMs;
+			ignore("escalation.pollMs", looser(base.escalation.pollMs));
 		}
 	}
 

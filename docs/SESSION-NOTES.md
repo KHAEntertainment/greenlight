@@ -27,6 +27,8 @@ Follow-up from an automated security review of that commit, also fixed:
 
 Decision: the classifier itself still receives raw (elided) arguments, as upstream does. Scrubbing those would hide exactly what the gate needs to judge exfiltration. Only the orchestrator path is scrubbed.
 
+Third review round, from the cloud session: CodeRabbit found that a project file could still set `escalation.timeoutSeconds: 1`, set a lower `humanTimeoutSeconds`, or raise `pollMs` past the deadline. Every escalation then timed out, and a headless run went ahead. These three values are now tighten-only as well: a project file can raise the two timeouts and lower `pollMs`, but not move them the other way. One test was added.
+
 Not changed, and why: escalate mode still falls back to the enforce rule, which allows headless calls unless `gate.blockWithoutUI` is set. That is the fail-open rule in AGENTS.md, not a bug. Tests: 133 pass (36 added). Typecheck and lint are clean.
 
 Pick up here: live test on this machine. It needs classifier credentials, because `~/.pi/agent/auth.json` has none for typesafe/openrouter/cloudflare yet. Run `/login openrouter` or set `TYPESAFE_API_KEY`, install with `pi install git:github.com/KHAEntertainment/pi-jev2`, then try shadow mode, then enforce.

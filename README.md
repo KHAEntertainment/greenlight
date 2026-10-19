@@ -187,7 +187,7 @@ For decisions that should come back typed rather than written:
 A project file comes with the repository, so it is not trusted to weaken your settings. It can tighten the gate but not loosen it:
 
 - **Global only:** `model`, `apiKey`, `apiKeyFile`, `escalation.transport`, `escalation.a2a`, `escalation.traycer`. A repo-chosen model could be one that never flags, and a global key override would follow it to another provider.
-- **Tighten only:** a project file may turn the gate or the output judge on, move `gate.mode` off `shadow` (but not change an `enforce` or `escalate` set globally), add to `gate.tools` and `output.tools` (not remove), lower `gate.blockOn` thresholds, `gate.minConfidence`, `output.leakThreshold`, `output.minConfidence` and `gate.cacheSeconds`, set `gate.blockWithoutUI: true`, and raise `gate.argumentChars`, `output.outputChars`, `timeoutMs` and `retries`. A value that loosens any of these is ignored with a warning.
+- **Tighten only:** a project file may turn the gate or the output judge on, move `gate.mode` off `shadow` (but not change an `enforce` or `escalate` set globally), add to `gate.tools` and `output.tools` (not remove), lower `gate.blockOn` thresholds, `gate.minConfidence`, `output.leakThreshold`, `output.minConfidence` and `gate.cacheSeconds`, set `gate.blockWithoutUI: true`, raise `gate.argumentChars`, `output.outputChars`, `timeoutMs`, `retries`, `escalation.timeoutSeconds` and `escalation.humanTimeoutSeconds`, and lower `escalation.pollMs`. A value that loosens any of these is ignored with a warning.
 
 ```json
 {

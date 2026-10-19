@@ -42,7 +42,7 @@ test("a bare 0.3 model id is qualified to TypeSafe", () => {
 });
 
 test("project overrides global, escalation merges per key", () => {
-	writeProject({ gate: { mode: "escalate" }, escalation: { humanTimeoutSeconds: 600 } });
+	writeProject({ gate: { mode: "escalate" }, escalation: { humanTimeoutSeconds: 3600 } });
 	writeGlobal({
 		model: "openrouter/typesafe/jev-1.13",
 		escalation: { transport: "a2a", timeoutSeconds: 60, a2a: { url: "https://orch.example/a2a", tokenEnv: "ORCH_TOKEN", tokenFile: "~/t" } },
@@ -54,9 +54,22 @@ test("project overrides global, escalation merges per key", () => {
 	expect(config.escalation).toMatchObject({
 		transport: "a2a",
 		timeoutSeconds: 60,
-		humanTimeoutSeconds: 600,
+		humanTimeoutSeconds: 3600,
 		a2a: { url: "https://orch.example/a2a", tokenEnv: "ORCH_TOKEN", tokenFile: "~/t" },
 	});
+});
+
+test("a project file can lengthen escalation waits but not shorten them", () => {
+	writeProject({ escalation: { timeoutSeconds: 1, humanTimeoutSeconds: 10, pollMs: 999_999 } });
+	let { config, warnings } = loadJevConfig(join(root, "project"));
+	expect(config.escalation).toMatchObject({ timeoutSeconds: 300, humanTimeoutSeconds: 1800, pollMs: 2000 });
+	for (const key of ["timeoutSeconds", "humanTimeoutSeconds", "pollMs"]) {
+		expect(warnings.some((w) => w.includes(`escalation.${key} is ignored`))).toBe(true);
+	}
+	writeProject({ escalation: { timeoutSeconds: 600, pollMs: 500 } });
+	({ config, warnings } = loadJevConfig(join(root, "project")));
+	expect(warnings).toEqual([]);
+	expect(config.escalation).toMatchObject({ timeoutSeconds: 600, pollMs: 500 });
 });
 
 test("a project file cannot redirect escalation or choose the Traycer command", () => {
