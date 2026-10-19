@@ -92,6 +92,8 @@ export interface Escalator {
 	 * the caller blocks the call and lets a retry use the decision.
 	 */
 	send?(req: EscalationRequest, signal?: AbortSignal): Promise<{ to: string }>;
+	/** Deferred transports only: the agent whose replies count, as of now. */
+	recipient?(signal?: AbortSignal): Promise<string>;
 }
 
 export class EscalationError extends Error {

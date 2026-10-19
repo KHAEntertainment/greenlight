@@ -124,6 +124,8 @@ Traycer (verified on 1.5.1) holds a message for a busy agent until its turn ends
 3. A retry of that exact call uses the decision once: an approve lets it run, a deny blocks it with `denied by <parent>: <reason>`. A changed call is a new request.
 4. With no reply within `escalation.timeoutSeconds` (`humanTimeoutSeconds` once the parent escalates to a human), the next retry falls back to the `enforce` rule, as for any orchestrator that does not answer. An unused decision goes stale after `timeoutSeconds`.
 
+Traycer runs each turn in a new pi process, so the wait is stored in the session (`jev-deferred` entries: request id, recipient, deadline, and a SHA-256 of the call, never its text) and restored at session start. Only the wait is stored, never a decision, and a stored wait is restored only when its recipient is still this agent's parent. Traycer puts its own `# Workspace Directories` preamble above the sender header, so the header is the first header-shaped line, not the first line.
+
 The block in step 1 is a wait, not a decision: the call runs as soon as the parent approves. `jev_escalate` works the same way over Traycer: it returns at once, and the decision arrives as the next message.
 
 The parent is `escalation.traycer.parentAgentId`, else `TRAYCER_PARENT_AGENT_ID`, else this agent's parent in `traycer agent list --json`.

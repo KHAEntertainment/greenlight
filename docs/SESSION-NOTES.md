@@ -29,7 +29,16 @@ Asked: "fix it", after a live Traycer probe showed the escalation reaching the p
 
 **Test note:** `bun test` inside a Traycer agent's shell fails the three `test/e2e/rpc.test.ts` cases, because the inherited `TRAYCER_*` variables route escalation to Traycer instead of the RPC parent. Run the suite with those two variables unset.
 
-Tests: 152 pass. Typecheck and lint are clean.
+**Probe 4 (agent 47eebaf3):** the block worked live. The gate returned `asked e6ce83ff… for a decision, request 56d35850…`, and the agent ended its turn and waited. The deny reached the model raw, though, because:
+- Traycer runs each turn in a new pi process (no pi process stays up after the turn), so the in-memory wait was gone.
+- Traycer puts `# Workspace Directories …` above the sender header, so a first-line header check never sees the header.
+
+The model still followed the gate's text and did not retry, and `src/math.ts` stayed. Fixes:
+- `jev-deferred` session entries hold the pending wait: request id, recipient, deadline, and a SHA-256 slot of the judgment key, never the call's text. `restoreDeferred` re-registers them at `session_start`, but only when the recipient is still the current parent.
+- Decisions are never stored, so a hand-edited session cannot forge an approval.
+- The header is the first header-shaped line.
+
+Tests: 154 pass. Typecheck and lint are clean.
 
 Pick up here: reinstall `claude/traycer-reply-via-input` in the sandbox, start a fresh Traycer Pi child, and repeat the deny probe: expect `asked <parent>` first, then `denied by <parent>` on the retry. An approve probe needs a permission rule for `traycer_send_message` in the parent's Claude Code session, because the auto-mode classifier blocked approvals there.
 

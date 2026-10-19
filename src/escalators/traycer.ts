@@ -94,9 +94,11 @@ export interface ReplyInbox {
 }
 
 /**
- * Traycer's prompt header names the sender on the first line, as
+ * Traycer's prompt header names the sender, as
  * `Agent message from <title> (agent <id>) [harness]` or
- * `[traycer:agent-message] from <title> (agent <id>) [harness]`. The title
+ * `[traycer:agent-message] from <title> (agent <id>) [harness]`. It is the
+ * first header-shaped line: Traycer may put its own preamble (`# Workspace
+ * Directories …`) above it, and the sender's text only below it. The title
  * is the sender's to choose, so the id is the last `(agent …)` before the
  * harness tag.
  */
@@ -109,9 +111,9 @@ const HEADER = /^(?:Agent message|\[traycer:agent-message\]) from .*\(agent ([0-
  * message has no agent header at all (typed by the local user).
  */
 function headerSender(text: string): string | null | undefined {
-	const first = text.split("\n", 1)[0] ?? "";
-	if (!HEADER_START.test(first)) return undefined;
-	return HEADER.exec(first)?.[1] ?? null;
+	const line = text.split("\n").find((candidate) => HEADER_START.test(candidate));
+	if (line === undefined) return undefined;
+	return HEADER.exec(line)?.[1] ?? null;
 }
 
 export interface ReplyMatch {
@@ -217,6 +219,10 @@ export function traycerEscalator(exec: Exec, options: TraycerOptions): Escalator
 		// extension sends, blocks the call, and takes the decision from the
 		// next prompt (`ReplyInbox`). `request` waits in-turn instead, for a
 		// host that delivers mid-turn.
+		async recipient(signal?: AbortSignal) {
+			requireSelf();
+			return parentId(signal);
+		},
 		async send(req: EscalationRequest, signal?: AbortSignal) {
 			const me = requireSelf();
 			const to = await parentId(signal);
