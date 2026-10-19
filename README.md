@@ -25,14 +25,22 @@ The classifier's provider needs credentials. Without them the extension loads, n
 | `model` | Provider | Credentials |
 |---|---|---|
 | `typesafe/jev-latest` (default) | TypeSafe | `TYPESAFE_API_KEY`, or `/login typesafe` |
-| `openrouter/typesafe/jev-1.13`, `openrouter/~typesafe/jev-latest` | OpenRouter | **`/login openrouter` (OAuth)**, or `OPENROUTER_API_KEY` |
+| `openrouter/typesafe/jev-1.14`, `openrouter/typesafe/jev-1.13`, `openrouter/~typesafe/jev-latest` | OpenRouter | **`/login openrouter` (OAuth)**, `OPENROUTER_API_KEY`, or `apiKeyFile` (see below) |
 | `cloudflare-workers-ai/typesafe/jev` | Cloudflare Workers AI | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
 | `vercel-ai-gateway/typesafe-ai/jev` | Vercel AI Gateway | `AI_GATEWAY_API_KEY` |
 | `opencode/jev-1.13`, `opencode/jev-1.13-free` | OpenCode Zen | `OPENCODE_API_KEY` |
 
 **OpenRouter OAuth** is pi's built-in PKCE flow: `/login openrouter` opens the browser, OpenRouter asks you to authorize, and pi stores the resulting key in `~/.pi/agent/auth.json`. No app registration is involved. **Cloudflare is API key only**: Cloudflare's OAuth needs an OAuth client registered in the dashboard, which a distributable extension cannot ship. The token needs Workers AI Read (and Edit, per Cloudflare's REST guide).
 
-Other System One models fill the same seat: `cloudflare-workers-ai/@cf/cloudflare/clef` and `clef-flash`, and on OpenRouter `inception/mercury-decide`, `upstage/solar-decide`, `liquid/d1`, `microsoft/microsoft-decision-1`, `perplexity/pplx-decider-v1.1-27b`, `nace-ai/drex-v2.0`, `jaredpalmer/kev-4b`, and more. pi lists them with `getModelsOfType("classifier")`. A custom provider in `models.json` (a llama.cpp server, a Cloudflare AI Gateway route) works the same way.
+Other System One models fill the same seat: `cloudflare-workers-ai/@cf/cloudflare/clef` and `clef-flash`, and on OpenRouter `inception/mercury-decide`, `upstage/solar-decide`, `liquid/d1`, `microsoft/microsoft-decision-1`, `perplexity/pplx-decider-v1.1-27b`, `nace-ai/drex-v2.0`, `jaredpalmer/kev-4b`, and more. pi lists them with `getModelsOfType("classifier")`. A custom classifier needs a provider registered by an extension (`pi.registerProvider`). In pi 1.3.0, `models.json` entries are always chat models: the loader drops `"type": "classifier"`.
+
+**OpenRouter's Jev models can be missing from pi's catalog.** pi 1.3.0 refreshes OpenRouter's model list from pi.dev, and that list holds only chat models, so it replaces the bundled `openrouter/typesafe/jev-*` entries. The extension carries those three definitions, copied from pi's bundled data, and uses one only when the catalog has no entry for it. It says so once at startup. The catalog always wins when it has the model.
+
+**Keeping OpenRouter's chat models out of pi.** `/login openrouter` or `OPENROUTER_API_KEY` makes all of OpenRouter's chat models (about 400) available in `/model` and to RPC hosts such as Traycer; `enabledModels` only limits startup selection and cycling. To use OpenRouter for Jev alone, give the key to this extension only: put it in a file, set `apiKeyFile` and `model` in the global `~/.pi/agent/pi-jev.json`, and do not log pi in to OpenRouter. `pi auth check --provider openrouter` then stays `not_ready`, and `pi --list-models openrouter` lists nothing.
+
+```json
+{ "model": "openrouter/typesafe/jev-1.14", "apiKeyFile": "~/.pi/agent/openrouter-jev.key" }
+```
 
 **The thresholds below were measured on Jev.** Another model may put the same states on a different scale. With a non-Jev model and the gate in `enforce` or `escalate`, the extension warns once at startup. Measure it first:
 

@@ -67,6 +67,19 @@ describe("session_start", () => {
 		expect(ctx.notifications.some((n) => n.message.includes("/login openrouter"))).toBe(true);
 	});
 
+	test("a Jev model missing from pi's catalog runs on the built-in definition, and says so", async () => {
+		const keyFile = join(root, "or.key");
+		writeFileSync(keyFile, "sk-or-test\n");
+		configure({ model: "openrouter/typesafe/jev-1.14", apiKeyFile: keyFile });
+		const pi = fakePi();
+		const registry = fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) }), { known: [], configured: false });
+		const { ctx } = await start(pi, {}, registry);
+		expect(ctx.notifications.some((n) => n.message.includes("built-in definition"))).toBe(true);
+		expect(ctx.notifications.some((n) => n.message.includes("inactive"))).toBe(false);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		expect(registry.calls[0]).toMatchObject({ model: "openrouter/typesafe/jev-1.14", apiKey: "sk-or-test" });
+	});
+
 	test("an unknown model is reported", async () => {
 		configure({ model: "openrouter/nobody/nothing" });
 		const pi = fakePi();
