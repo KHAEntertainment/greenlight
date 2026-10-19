@@ -17,7 +17,15 @@ Asked: "fix it", after a live Traycer probe showed the escalation reaching the p
 
 **Fix.** `createReplyInbox` in `src/escalators/traycer.ts`, one per extension instance (`src/index.ts`). The escalator registers the request it waits on; a `pi.on("input")` handler offers each incoming message, and a match resolves the wait and returns `{action: "handled"}`, so the model never sees the decision. A match is the request `id` in the reply JSON (the request message now asks for it), or, with no id and only for deny or escalate, Traycer's header naming the parent while exactly one request waits on it; an approve must carry the id. The sender is read only from the first-line header, as the last `(agent …)` before the harness tag, because the title is the sender's to choose. A message whose first line starts like an agent header but does not parse is rejected, not treated as typed by the local user. A header naming another agent is rejected, so the agent cannot answer itself through `traycer agent send`. (Both tightenings came from an automated security review of the first commit.) `escalate` extends the wait as before. The inbox poll stays as a backup and is raced against the input path; an inbox read error no longer ends the wait when the input path exists. The object cursor becomes `--after createdAt:eventId`.
 
-**Not verified yet:** that Traycer delivers the reply mid-run (as a pi steer input) rather than after the turn ends. The transcript order suggests mid-run. If it arrives after the turn, the gate has already timed out and failed open to the enforce rule.
+**Live re-test (probe 3, agent 5cd676ff, first commit of PR #3): the input path does not work on Traycer 1.5.1.** Traycer holds a message for a busy agent until its turn ends. Timeline from the child's pi session log:
+- 23:18:23 the gate flagged a call and escalated.
+- About 23:19 the parent replied deny with the request id.
+- 23:23:24 the escalation timed out (300 s) and fell back to `(declined)`.
+- 23:23:28, after the turn ended, the deny arrived as a new prompt.
+
+`traycer agent send` has no mid-turn delivery option, and `traycer agent inbox` lists only messages already delivered, so neither channel can see the reply while the gated call waits. The prompt Traycer delivered also used a second header form, `[traycer:agent-message] from <title> (agent <id>) [harness]`, alongside the `Agent message from …` form seen on the first prompt.
+
+Open design question for the owner: synchronous escalation over Traycer cannot work on 1.5.1. Options are (a) block the call at once with "asked <parent>, waiting", end the turn, and let the reply that arrives as the next prompt approve a retry of that exact call; or (b) keep Traycer escalation documented as unsupported and fall back to the enforce rule.
 
 **Test note:** `bun test` inside a Traycer agent's shell fails the three `test/e2e/rpc.test.ts` cases, because the inherited `TRAYCER_*` variables route escalation to Traycer instead of the RPC parent. Run the suite with those two variables unset.
 
