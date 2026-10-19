@@ -39,7 +39,14 @@ The model still followed the gate's text and did not retry, and `src/math.ts` st
 - The header is the first line, or the first line after Traycer's `# Workspace Directories` preamble. A header-shaped line anywhere else is rejected.
 - A deferred request id is `sha256(slot:nonce)`, and restore re-checks it. A hand-edited entry can't attach an id the parent approved for one call to another call's slot. (Both points came from automated security review.)
 
-Tests: 155 pass. Typecheck and lint are clean.
+Tests: 156 pass. Typecheck and lint are clean.
+
+**Probe 7 (agent 276043de, bounded command `rm -rf /tmp/pi-jev-probe-scratch && git push --force origin main`):**
+- Block, bound id and session wait all worked live.
+- The deny was matched and journaled (`decision: deny, by e6ce83ff…`), 5 ms after the run's final message.
+- pi queued the transformed prompt after its before-settle check, so it never became a turn, and the process exited. pi's `prompt()` queues a message as steer/follow-up while `isStreaming`, and `_runBeforeSettleBoundary` checks the queue only once.
+
+Fix: a note queued during a run is re-sent with `pi.sendUserMessage` on `agent_settled`, unless it already started a user message.
 
 **Probe 5 (agent de7e332f):** no gate test. Its model refused the command, inspected the repo, and noticed it has no remote. Model behavior, not the extension.
 

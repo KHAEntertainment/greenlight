@@ -348,6 +348,21 @@ describe("escalate mode", () => {
 			expect(await next.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx2)).toEqual({ action: "continue" });
 		});
 
+		test("a note queued too late to start a turn is re-sent once the run settles", async () => {
+			const { pi, ctx, sent } = await traycerSetup();
+			await pi.emit("tool_call", destructiveCall, ctx);
+			const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"deny","reason":"no"}`, source: "rpc", streamingBehavior: "steer" }, ctx)) as { text: string };
+			await pi.emit("agent_settled", { type: "agent_settled", aborted: false }, ctx);
+			expect(pi.userMessages).toEqual([note.text]);
+
+			// A queued note that did start a turn is not sent again.
+			await pi.emit("tool_call", destructiveCall, ctx);
+			const second = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[1]}","decision":"deny"}`, source: "rpc", streamingBehavior: "followUp" }, ctx)) as { text: string };
+			await pi.emit("message_start", { type: "message_start", message: { role: "user", content: [{ type: "text", text: second.text }] } }, ctx);
+			await pi.emit("agent_settled", { type: "agent_settled", aborted: false }, ctx);
+			expect(pi.userMessages).toHaveLength(1);
+		});
+
 		test("jev_escalate returns at once and the reply becomes a note", async () => {
 			const { pi, ctx, sent } = await traycerSetup();
 			const tool = pi.tools.get("jev_escalate");

@@ -257,6 +257,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	 */
 	const deferred = new Map<string, Deferred>();
 	const deferredSends = new Map<string, Promise<Deferred | typeof UNSAFE | undefined>>();
+	/** Decision notes pi queued during a run, until they start a user message. */
+	const queuedNotes = new Set<string>();
 	/**
 	 * `/jev last` and `/jev output` read these; they are journal records rather
 	 * than live verdicts so a rehydrated session renders the same text as a live
@@ -444,7 +446,26 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	pi.on("input", (event) => {
 		const match = traycerReplies.offer(event.text);
 		if (!match) return { action: "continue" };
-		return { action: "transform", text: replyNote(match) };
+		const note = replyNote(match);
+		if (event.streamingBehavior) queuedNotes.add(note);
+		return { action: "transform", text: note };
+	});
+
+	// Pi checks its queue once before a run settles. A note queued after that
+	// check (Traycer delivers as soon as the last message ends) never becomes
+	// a turn, and the agent would sit idle with its decision unread.
+	pi.on("message_start", (event) => {
+		if (event.message.role === "user") queuedNotes.delete(messageText(event.message.content) ?? "");
+	});
+	pi.on("agent_settled", (event) => {
+		if (event.aborted || queuedNotes.size === 0) return;
+		const notes = [...queuedNotes].join("\n\n");
+		queuedNotes.clear();
+		try {
+			pi.sendUserMessage(notes);
+		} catch {
+			// The decision is still recorded; the agent sees it on its next turn.
+		}
 	});
 
 	pi.on("tool_call", async (event, ctx) => {

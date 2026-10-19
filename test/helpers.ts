@@ -133,6 +133,7 @@ export interface FakePi {
 	tools: Map<string, any>;
 	active: string[];
 	entries: { customType: string; data: unknown }[];
+	userMessages: unknown[];
 	emit(name: string, event: any, ctx: any): Promise<unknown>;
 	execCalls: { command: string; args: string[] }[];
 }
@@ -142,10 +143,12 @@ export function fakePi(exec?: (command: string, args: string[]) => Promise<{ std
 	const tools = new Map<string, any>();
 	const entries: { customType: string; data: unknown }[] = [];
 	const execCalls: { command: string; args: string[] }[] = [];
+	const userMessages: unknown[] = [];
 	const fake: FakePi = {
 		handlers,
 		tools,
 		entries,
+		userMessages,
 		execCalls,
 		active: [],
 		api: undefined,
@@ -169,6 +172,7 @@ export function fakePi(exec?: (command: string, args: string[]) => Promise<{ std
 		},
 		registerCommand: () => undefined,
 		appendEntry: (customType: string, data: unknown) => entries.push({ customType, data }),
+		sendUserMessage: (content: unknown) => userMessages.push(content),
 		getActiveTools: () => [...fake.active],
 		setActiveTools: (names: string[]) => {
 			fake.active = names;
