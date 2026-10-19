@@ -86,6 +86,12 @@ export interface Escalator {
 		req: EscalationRequest,
 		wait: EscalationWait,
 	): Promise<EscalationDecision & { decision: "approve" | "deny" }>;
+	/**
+	 * Deferred transports only: send the request and return at once. The
+	 * decision arrives later as chat input, after the current turn ends, so
+	 * the caller blocks the call and lets a retry use the decision.
+	 */
+	send?(req: EscalationRequest, signal?: AbortSignal): Promise<{ to: string }>;
 }
 
 export class EscalationError extends Error {

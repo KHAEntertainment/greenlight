@@ -221,44 +221,87 @@ describe("escalate mode", () => {
 		expect(ctx.notifications.some((n) => n.message.includes("headless: not blocking"))).toBe(true);
 	});
 
-	test("Traycer env routes through the CLI", async () => {
-		process.env.TRAYCER_AGENT_ID = "child-1";
-		process.env.TRAYCER_EPIC_ID = "epic-1";
-		configure({ gate: { mode: "escalate" }, escalation: { pollMs: 1, traycer: { parentAgentId: "lead-1" } } });
-		let inboxReads = 0;
-		const pi = fakePi(async (_command, args) => {
-			if (args[1] === "send") return { code: 0, stderr: "", stdout: '{"type":"result","responseId":"r-1"}' };
-			inboxReads += 1;
-			const messages = inboxReads > 1 ? [{ responseId: "r-1", prompt: '{"decision":"deny","reason":"ask the user first"}' }] : [];
-			return { code: 0, stderr: "", stdout: JSON.stringify({ type: "result", messages }) };
-		});
-		const { ctx } = await start(pi, { mode: "tui" });
-		const result = (await pi.emit("tool_call", destructiveCall, ctx)) as { block: boolean; reason: string };
-		expect(result.reason).toContain("denied by lead-1: ask the user first");
-		expect(pi.execCalls.some((c) => c.command === "traycer" && c.args.includes("--to") && c.args.includes("lead-1"))).toBe(true);
-	});
+	describe("Traycer: block, then retry", () => {
+		const header = "[traycer:agent-message] from Lead (agent lead-1) [claude]\n[traycer:agent-message] No reply is required.\n\n";
 
-	test("Traycer reply delivered as chat input is consumed and denies", async () => {
-		process.env.TRAYCER_AGENT_ID = "child-1";
-		process.env.TRAYCER_EPIC_ID = "epic-1";
-		configure({ gate: { mode: "escalate" }, escalation: { pollMs: 5, traycer: { parentAgentId: "lead-1" } } });
-		let requestId = "";
-		const pi = fakePi(async (_command, args) => {
-			if (args[1] === "send") {
-				requestId = /"id":"([^"]+)"/.exec(args.join(" "))?.[1] ?? "";
-				return { code: 0, stderr: "", stdout: '{"type":"result","data":{"responseId":"r-1"}}' };
-			}
-			return { code: 0, stderr: "", stdout: JSON.stringify({ type: "result", data: { messages: [], nextCursor: null } }) };
+		async function traycerSetup(extra: Record<string, unknown> = {}) {
+			process.env.TRAYCER_AGENT_ID = "child-1";
+			process.env.TRAYCER_EPIC_ID = "epic-1";
+			configure({ gate: { mode: "escalate" }, escalation: { traycer: { parentAgentId: "lead-1" }, ...extra } });
+			const sent: string[] = [];
+			const pi = fakePi(async (_command, args) => {
+				if (args[1] === "send") {
+					sent.push(/"id":"([^"]+)"/.exec(args.join(" "))?.[1] ?? "");
+					return { code: 0, stderr: "", stdout: '{"type":"result","data":{"responseId":"r-1"}}' };
+				}
+				return { code: 2, stderr: "unexpected", stdout: "" };
+			});
+			const { ctx } = await start(pi, { mode: "tui" });
+			return { pi, ctx, sent };
+		}
+
+		test("the flagged call is blocked while the parent decides; a deny holds on retry", async () => {
+			const { pi, ctx, sent } = await traycerSetup();
+			const first = (await pi.emit("tool_call", destructiveCall, ctx)) as { block: boolean; reason: string };
+			expect(first.block).toBe(true);
+			expect(first.reason).toContain(`asked lead-1 for a decision, request ${sent[0]}`);
+			expect(pi.execCalls.some((c) => c.args.includes("--to") && c.args.includes("lead-1"))).toBe(true);
+			// A sibling or an early retry does not send again.
+			const again = (await pi.emit("tool_call", { ...destructiveCall, toolCallId: "call-2" }, ctx)) as { reason: string };
+			expect(again.reason).toContain("asked lead-1");
+			expect(sent).toHaveLength(1);
+
+			expect(await pi.emit("input", { type: "input", text: "unrelated", source: "rpc" }, ctx)).toEqual({ action: "continue" });
+			const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"deny","reason":"ask the user first"}`, source: "rpc" }, ctx)) as { action: string; text: string };
+			expect(note.action).toBe("transform");
+			expect(note.text).toContain("lead-1 denied the flagged `bash` call: ask the user first. Do not retry it");
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			const retry = (await pi.emit("tool_call", destructiveCall, ctx)) as { reason: string };
+			expect(retry.reason).toContain("denied by lead-1: ask the user first");
 		});
-		const { ctx } = await start(pi, { mode: "tui" });
-		const call = pi.emit("tool_call", destructiveCall, ctx);
-		await new Promise((resolve) => setTimeout(resolve, 20));
-		expect(requestId).not.toBe("");
-		expect(await pi.emit("input", { type: "input", text: "unrelated chatter", source: "interactive" }, ctx)).toEqual({ action: "continue" });
-		const text = `Agent message from Lead (agent lead-1) [claude]\nNo reply required.\n\n{"id":"${requestId}","decision":"deny","reason":"ask the user first"}`;
-		expect(await pi.emit("input", { type: "input", text, source: "interactive", streamingBehavior: "steer" }, ctx)).toEqual({ action: "handled" });
-		const result = (await call) as { block: boolean; reason: string };
-		expect(result.reason).toContain("denied by lead-1: ask the user first");
+
+		test("an approve lets exactly one retry of that call run", async () => {
+			const { pi, ctx, sent } = await traycerSetup();
+			await pi.emit("tool_call", destructiveCall, ctx);
+			const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx)) as { text: string };
+			expect(note.text).toContain("approved the flagged `bash` call. Retry that exact call now");
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(await pi.emit("tool_call", destructiveCall, ctx)).toBeUndefined();
+			const later = (await pi.emit("tool_call", destructiveCall, ctx)) as { reason: string };
+			expect(later.reason).toContain("asked lead-1");
+			expect(sent).toHaveLength(2);
+		});
+
+		test("an approve without the request id is not taken", async () => {
+			const { pi, ctx } = await traycerSetup();
+			await pi.emit("tool_call", destructiveCall, ctx);
+			expect(await pi.emit("input", { type: "input", text: `${header}{"decision":"approve"}`, source: "rpc" }, ctx)).toEqual({ action: "continue" });
+			const retry = (await pi.emit("tool_call", destructiveCall, ctx)) as { reason: string };
+			expect(retry.reason).toContain("asked lead-1");
+		});
+
+		test("no answer in time falls back to the enforce rule", async () => {
+			const { pi, ctx } = await traycerSetup();
+			await pi.emit("tool_call", destructiveCall, ctx);
+			const realNow = Date.now;
+			Date.now = () => realNow() + 301_000;
+			try {
+				const retry = (await pi.emit("tool_call", destructiveCall, ctx)) as { reason: string };
+				expect(retry.reason).not.toContain("asked lead-1");
+				expect(ctx.confirms.length).toBe(1);
+			} finally {
+				Date.now = realNow;
+			}
+		});
+
+		test("jev_escalate returns at once and the reply becomes a note", async () => {
+			const { pi, ctx, sent } = await traycerSetup();
+			const tool = pi.tools.get("jev_escalate");
+			const result = await tool.execute("t", { question: "May I drop the staging DB?", action: "psql -c 'drop database staging'" }, undefined, undefined, ctx);
+			expect(result.content[0].text).toContain(`jev_escalate: asked lead-1, request ${sent[0]}. End your turn now`);
+			const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"deny","reason":"not today"}`, source: "rpc" }, ctx)) as { text: string };
+			expect(note.text).toBe(`[pi-jev] lead-1 denied your jev_escalate request ${sent[0]}: not today. Do not take the action; adjust the plan or ask the user.`);
+		});
 	});
 
 	test("sibling identical calls share one escalation", async () => {

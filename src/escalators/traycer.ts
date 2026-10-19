@@ -84,20 +84,24 @@ export interface ReplyInbox {
 		onEscalated?: (decision: EscalationDecision) => void,
 	): { promise: Promise<FinalDecision>; cancel(): void };
 	/**
-	 * Offer one incoming message. True when it answered a pending request, so
-	 * the caller consumes it: the decision is the gate's to act on, and the
-	 * model must not read an approval it did not get.
+	 * Offer one incoming message. A match means it answered a pending
+	 * request, so the caller must not pass the raw text on: the decision is
+	 * the gate's to act on, and the model must not act on an approval the
+	 * gate did not record.
 	 */
-	offer(text: string): boolean;
+	offer(text: string): ReplyMatch | undefined;
 	readonly pending: number;
 }
 
 /**
- * Traycer's prompt header names the sender on the first line:
- * `Agent message from <title> (agent <id>) [harness]`. The title is the
- * sender's to choose, so the id is the last `(agent …)` before the harness.
+ * Traycer's prompt header names the sender on the first line, as
+ * `Agent message from <title> (agent <id>) [harness]` or
+ * `[traycer:agent-message] from <title> (agent <id>) [harness]`. The title
+ * is the sender's to choose, so the id is the last `(agent …)` before the
+ * harness tag.
  */
-const HEADER = /^Agent message from .*\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\) \[[^\]\n]+\]\s*$/;
+const HEADER_START = /^(?:Agent message|\[traycer:agent-message\]) from /;
+const HEADER = /^(?:Agent message|\[traycer:agent-message\]) from .*\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\) \[[^\]\n]+\]\s*$/;
 
 /**
  * The sender named by the header; null when the message is from an agent but
@@ -106,8 +110,14 @@ const HEADER = /^Agent message from .*\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\) \[
  */
 function headerSender(text: string): string | null | undefined {
 	const first = text.split("\n", 1)[0] ?? "";
-	if (!first.startsWith("Agent message from ")) return undefined;
+	if (!HEADER_START.test(first)) return undefined;
 	return HEADER.exec(first)?.[1] ?? null;
+}
+
+export interface ReplyMatch {
+	requestId: string;
+	/** `escalate` means a human now decides; the request stays pending. */
+	decision: EscalationDecision & { by: string };
 }
 
 export function createReplyInbox(): ReplyInbox {
@@ -130,9 +140,9 @@ export function createReplyInbox(): ReplyInbox {
 			};
 		},
 		offer(text) {
-			if (waiting.size === 0) return false;
+			if (waiting.size === 0) return undefined;
 			const sender = headerSender(text);
-			if (sender === null) return false;
+			if (sender === null) return undefined;
 			const body = extractJsonObject(text);
 			const id = body ? (findString(body, ["id", "requestId", "request_id"], 0) ?? undefined) : undefined;
 			// The request id is shared only with the parent, so it names the
@@ -144,18 +154,19 @@ export function createReplyInbox(): ReplyInbox {
 				const candidates = [...waiting.values()].filter((pending) => pending.from === sender);
 				if (candidates.length === 1) entry = candidates[0];
 			}
-			if (!entry) return false;
-			if (sender && sender !== entry.from) return false;
+			if (!entry) return undefined;
+			if (sender && sender !== entry.from) return undefined;
 			const decision = parseDecision(body ?? text);
-			if (!decision) return false;
-			if (!id && decision.decision === "approve") return false;
+			if (!decision) return undefined;
+			if (!id && decision.decision === "approve") return undefined;
+			const match = { requestId: entry.requestId, decision: { ...decision, by: decision.by ?? entry.from } };
 			if (decision.decision === "escalate") {
 				entry.onEscalated?.(decision);
-				return true;
+				return match;
 			}
 			waiting.delete(entry.requestId);
-			entry.resolve({ ...decision, decision: decision.decision, by: decision.by ?? entry.from });
-			return true;
+			entry.resolve({ ...match.decision, decision: decision.decision });
+			return match;
 		},
 	};
 }
@@ -192,12 +203,28 @@ export function traycerEscalator(exec: Exec, options: TraycerOptions): Escalator
 		return parent;
 	}
 
+	/** This agent's id; throws outside Traycer. */
+	function requireSelf(): string {
+		if (!self || !options.env.TRAYCER_EPIC_ID) {
+			throw new EscalationError("not running under Traycer (TRAYCER_EPIC_ID/TRAYCER_AGENT_ID unset)");
+		}
+		return self;
+	}
+
 	return {
 		name: "traycer",
+		// Traycer 1.5.1 holds a reply until this agent's turn ends, so the
+		// extension sends, blocks the call, and takes the decision from the
+		// next prompt (`ReplyInbox`). `request` waits in-turn instead, for a
+		// host that delivers mid-turn.
+		async send(req: EscalationRequest, signal?: AbortSignal) {
+			const me = requireSelf();
+			const to = await parentId(signal);
+			await run(["agent", "send", "--to", to, "--message", traycerMessage(req, me), "--expect-reply"], signal);
+			return { to };
+		},
 		async request(req: EscalationRequest, wait: EscalationWait) {
-			if (!self || !options.env.TRAYCER_EPIC_ID) {
-				throw new EscalationError("not running under Traycer (TRAYCER_EPIC_ID/TRAYCER_AGENT_ID unset)");
-			}
+			const me = requireSelf();
 			const to = await parentId(wait.signal);
 			// Read the cursor first so a stale reply in the inbox cannot answer us.
 			// With chat replies as the main path, an unreadable inbox only loses
@@ -209,7 +236,7 @@ export function traycerEscalator(exec: Exec, options: TraycerOptions): Escalator
 				}),
 			);
 			const sent = await run(
-				["agent", "send", "--to", to, "--message", traycerMessage(req, self), "--expect-reply"],
+				["agent", "send", "--to", to, "--message", traycerMessage(req, me), "--expect-reply"],
 				wait.signal,
 			);
 			const responseId = findString(resultOf(sent), ["responseId", "response_id"]);

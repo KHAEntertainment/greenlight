@@ -110,13 +110,23 @@ Every escalation is journaled (`/jev log`) with its decision, who made it, the t
 
 | Transport | Chosen when | How |
 |---|---|---|
-| `traycer` | `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID` are set (Traycer sets both on every agent it launches) | `traycer agent send --to <parent> --expect-reply --json`, then waits for the parent's reply in this agent's chat input, with `traycer agent inbox` polled for the same `responseId` as a backup |
+| `traycer` | `TRAYCER_AGENT_ID` and `TRAYCER_EPIC_ID` are set (Traycer sets both on every agent it launches) | `traycer agent send --to <parent> --expect-reply --json`, blocks the call, and takes the parent's reply from the next prompt; a retry of the same call uses the decision once |
 | `a2a` | `escalation.a2a.url` is set | A2A v1.0 JSON-RPC: `SendMessage` with `returnImmediately`, then `GetTask` until a decision |
 | `pi-rpc` | pi runs as `pi --mode rpc` (a parent process holds its stdin) | an `input` dialog that the parent answers over pi's extension UI subprotocol |
 
 Set `transport` to one of these to force it, or to `none` to treat escalate as enforce.
 
-**Traycer** has no public A2A endpoint; its agent-to-agent channel is the `traycer` CLI. The managing agent receives a `[traycer:agent-message]` that explains the pause and asks for `{"id":"<request id>","decision":"approve"|"deny"|"escalate","reason":"..."}` back. Traycer delivers that reply into this agent's conversation as a new prompt, even while the gated call is waiting. The extension's `input` handler takes it when it carries the request's `id` (a deny or escalate without one is taken when Traycer's header names the parent and only one request is waiting on it; an approve must name its request), resolves the wait, and consumes the message so the model never reads it. A reply whose header names any other agent is ignored. The CLI inbox is polled too, for hosts that keep replies there. The parent is `escalation.traycer.parentAgentId`, else `TRAYCER_PARENT_AGENT_ID`, else this agent's parent in `traycer agent list --json`.
+**Traycer** has no public A2A endpoint; its agent-to-agent channel is the `traycer` CLI. The managing agent receives a `[traycer:agent-message]` that explains the pause and asks for `{"id":"<request id>","decision":"approve"|"deny"|"escalate","reason":"..."}` back.
+
+Traycer (verified on 1.5.1) holds a message for a busy agent until its turn ends, so a gated call cannot wait in-turn for the reply. Escalation over Traycer is therefore block-then-retry:
+1. The flagged call is blocked at once with `asked <parent> for a decision, request <id>`, and the agent is told to end its turn and wait. Identical calls while it waits are blocked without sending again.
+2. The parent's reply arrives as the next prompt. The extension's `input` handler takes it when it carries the request's `id`; a deny or escalate without one is taken when Traycer's header names the parent and only one request is waiting on it, while an approve must name its request. A reply whose header names any other agent is ignored. The model reads a short `[pi-jev]` note in place of the raw reply.
+3. A retry of that exact call uses the decision once: an approve lets it run, a deny blocks it with `denied by <parent>: <reason>`. A changed call is a new request.
+4. With no reply within `escalation.timeoutSeconds` (`humanTimeoutSeconds` once the parent escalates to a human), the next retry falls back to the `enforce` rule, as for any orchestrator that does not answer. An unused decision goes stale after `timeoutSeconds`.
+
+The block in step 1 is a wait, not a decision: the call runs as soon as the parent approves. `jev_escalate` works the same way over Traycer: it returns at once, and the decision arrives as the next message.
+
+The parent is `escalation.traycer.parentAgentId`, else `TRAYCER_PARENT_AGENT_ID`, else this agent's parent in `traycer agent list --json`.
 
 **A2A**: the request rides as a `data` part (schema `pi-jev.escalation/v1`) plus a text summary. A bare origin as `url` is resolved through `/.well-known/agent-card.json`. Task states map like this:
 

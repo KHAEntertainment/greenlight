@@ -25,13 +25,13 @@ Asked: "fix it", after a live Traycer probe showed the escalation reaching the p
 
 `traycer agent send` has no mid-turn delivery option, and `traycer agent inbox` lists only messages already delivered, so neither channel can see the reply while the gated call waits. The prompt Traycer delivered also used a second header form, `[traycer:agent-message] from <title> (agent <id>) [harness]`, alongside the `Agent message from …` form seen on the first prompt.
 
-Open design question for the owner: synchronous escalation over Traycer cannot work on 1.5.1. Options are (a) block the call at once with "asked <parent>, waiting", end the turn, and let the reply that arrives as the next prompt approve a retry of that exact call; or (b) keep Traycer escalation documented as unsupported and fall back to the enforce rule.
+**Decision (owner): block, then retry.** Over a transport with `send` (Traycer), `deferredDecision` in `src/index.ts` sends the request and blocks the flagged call with "asked <parent> for a decision, request <id>; end your turn". The reply arrives as the next prompt; the `input` handler records the decision and transforms the prompt into a `[pi-jev]` note for the model. A retry of the same call (same judgment key) uses the decision once. No reply within `timeoutSeconds` (`humanTimeoutSeconds` after an escalate) means the next retry gets the enforce rule, so the fail-open rule in AGENTS.md still holds; the block while waiting is a wait, not a deny. `jev_escalate` over Traycer returns at once the same way. The in-turn `request` path in the Traycer escalator stays for a host that delivers mid-turn, unused by the extension today. Recorded in AGENTS.md and the README.
 
 **Test note:** `bun test` inside a Traycer agent's shell fails the three `test/e2e/rpc.test.ts` cases, because the inherited `TRAYCER_*` variables route escalation to Traycer instead of the RPC parent. Run the suite with those two variables unset.
 
-Tests: 148 pass (7 added). Typecheck and lint are clean.
+Tests: 152 pass. Typecheck and lint are clean.
 
-Pick up here: point the sandbox at `claude/traycer-reply-via-input`, start a fresh Traycer Pi child, and repeat the deny probe, then an approve probe.
+Pick up here: reinstall `claude/traycer-reply-via-input` in the sandbox, start a fresh Traycer Pi child, and repeat the deny probe: expect `asked <parent>` first, then `denied by <parent>` on the retry. An approve probe needs a permission rule for `traycer_send_message` in the parent's Claude Code session, because the auto-mode classifier blocked approvals there.
 
 ---
 

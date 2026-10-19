@@ -42,7 +42,7 @@ import {
 } from "./escalation";
 import { a2aEscalator } from "./escalators/a2a";
 import { piRpcEscalator } from "./escalators/pi-rpc";
-import { createReplyInbox, traycerEscalator } from "./escalators/traycer";
+import { createReplyInbox, type ReplyMatch, traycerEscalator } from "./escalators/traycer";
 import {
 	buildGateState,
 	describeAnswers,
@@ -100,6 +100,22 @@ import {
 
 const STATUS_KEY = "jev";
 const ESCALATE_TOOL = "jev_escalate";
+/** Deferred-escalation key prefix for jev_escalate requests. */
+const AGENT_KEY = "agent:";
+
+/** A request sent over a deferred transport, waiting for or holding its decision. */
+interface Deferred {
+	requestId: string;
+	toolName: string;
+	transport: string;
+	to: string;
+	sentAt: number;
+	/** Waiting: when the enforce rule takes over. Decided: when the decision goes stale. */
+	deadline: number;
+	viaHuman: boolean;
+	outcome?: EscalationOutcome;
+	cancel(): void;
+}
 const ERROR_NOTIFY_INTERVAL_MS = 60_000;
 /** Identical output is judged once per window, keyed by tool and output hash. */
 const OUTPUT_CACHE_SECONDS = 120;
@@ -183,6 +199,14 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	const outputInflight = new Map<string, Promise<OutputVerdict | undefined>>();
 	/** One orchestrator question per identical pending call, shared by siblings. */
 	const escalations = new Map<string, Promise<EscalationOutcome | typeof UNSAFE | undefined>>();
+	/**
+	 * Escalations over a deferred transport (Traycer), by judgment key, or
+	 * `agent:<request id>` for jev_escalate. The request is sent and the call
+	 * blocked; the decision comes with a later prompt and is kept for one
+	 * retry of that exact call.
+	 */
+	const deferred = new Map<string, Deferred>();
+	const deferredSends = new Map<string, Promise<Deferred | typeof UNSAFE | undefined>>();
 	/**
 	 * `/jev last` and `/jev output` read these; they are journal records rather
 	 * than live verdicts so a rehydrated session renders the same text as a live
@@ -364,8 +388,13 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus(STATUS_KEY, statusText());
 	});
 
-	// A decision on a pending escalation is the gate's, not the model's: consume it.
-	pi.on("input", (event) => (traycerReplies.offer(event.text) ? { action: "handled" } : { action: "continue" }));
+	// A decision on a pending escalation is the gate's: the gate records it,
+	// and the model reads a note saying what to do, never the raw reply.
+	pi.on("input", (event) => {
+		const match = traycerReplies.offer(event.text);
+		if (!match) return { action: "continue" };
+		return { action: "transform", text: replyNote(match) };
+	});
 
 	pi.on("tool_call", async (event, ctx) => {
 		if (!gateOn || inactive) return;
@@ -395,6 +424,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		if (mode === "escalate") {
+			const escalator = escalatorFor(ctx);
+			if (escalator?.send) {
+				return deferredDecision(key, event, verdict, reason, escalator.send.bind(escalator), escalator.name, ctx);
+			}
 			const outcome = await escalationFor(key, event, verdict, ctx);
 			if (outcome === UNSAFE) {
 				// Not an outage: the call itself carries a credential mixed with
@@ -463,6 +496,151 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		).finally(() => escalations.delete(key));
 		escalations.set(key, promise);
 		return promise;
+	}
+
+	/**
+	 * Escalate mode over a deferred transport. The first flagged call sends
+	 * the request and is blocked while the orchestrator decides; the turn
+	 * ends, the decision arrives as the next prompt, and a retry of the same
+	 * call uses it once. No answer in time falls back to the enforce rule.
+	 */
+	async function deferredDecision(
+		key: string,
+		event: { toolName: string; input: unknown },
+		verdict: GateVerdict,
+		reason: string,
+		send: NonNullable<Escalator["send"]>,
+		transport: string,
+		ctx: ExtensionContext,
+	): Promise<{ block: true; reason: string } | undefined> {
+		const now = Date.now();
+		const entry = deferred.get(key);
+		if (entry?.outcome) {
+			deferred.delete(key);
+			if (now <= entry.deadline) {
+				if (entry.outcome.decision === "approve") {
+					ctx.ui.notify(`jev: ${event.toolName} ${describeOutcome(entry.outcome)}`, "info");
+					return undefined;
+				}
+				return { block: true, reason: `${reason} (${describeOutcome(entry.outcome)})` };
+			}
+			// A decision nobody used in time is stale: ask again.
+		} else if (entry && now < entry.deadline) {
+			return { block: true, reason: `${reason} (${waitingText(entry)})` };
+		} else if (entry) {
+			// No answer in time: the enforce rule decides, as for any transport.
+			entry.cancel();
+			deferred.delete(key);
+			remember(
+				escalationRecord(
+					event.toolName,
+					{ fallback: "escalation timed out", transport: entry.transport, latencyMs: now - entry.sentAt },
+					now,
+				),
+			);
+			ctx.ui.setStatus(STATUS_KEY, statusText());
+			return localDecision(event.toolName, verdict, reason, ctx);
+		}
+		let inflight = deferredSends.get(key);
+		if (!inflight) {
+			inflight = sendDeferred(gateRequest(event, verdict, ctx), event.toolName, key, send, transport, ctx).finally(() =>
+				deferredSends.delete(key),
+			);
+			deferredSends.set(key, inflight);
+		}
+		const sent = await inflight;
+		if (sent === UNSAFE) {
+			// Same rule as an in-turn escalation: headless blocks (see tool_call).
+			return localDecision(event.toolName, verdict, `${reason} (not escalated: ${UNSAFE_REASON})`, ctx, true);
+		}
+		if (!sent) return localDecision(event.toolName, verdict, reason, ctx);
+		return { block: true, reason: `${reason} (${waitingText(sent)})` };
+	}
+
+	function waitingText(entry: Deferred): string {
+		return `asked ${entry.to} for a decision, request ${entry.requestId}. End your turn now and wait: the decision arrives as your next message. Retry this exact call only if it is approved`;
+	}
+
+	/** Send over a deferred transport and record what to expect back. */
+	async function sendDeferred(
+		request: EscalationRequest,
+		toolName: string,
+		key: string,
+		send: NonNullable<Escalator["send"]>,
+		transport: string,
+		ctx: ExtensionContext,
+	): Promise<Deferred | typeof UNSAFE | undefined> {
+		const scrubbed = scrubSecrets(request, redact);
+		if (scrubbed.unsafe) {
+			remember(escalationRecord(toolName, { fallback: UNSAFE_REASON, transport, latencyMs: 0 }, Date.now()));
+			ctx.ui.notify(`jev: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
+			return UNSAFE;
+		}
+		if (scrubbed.redacted) scrubbed.value.redacted = true;
+		const started = Date.now();
+		try {
+			const { to } = await send(scrubbed.value, ctx.signal);
+			const entry: Deferred = {
+				requestId: request.id,
+				toolName,
+				transport,
+				to,
+				sentAt: started,
+				deadline: Date.now() + config.escalation.timeoutSeconds * 1000,
+				viaHuman: false,
+				cancel: () => undefined,
+			};
+			const waiting = traycerReplies.expect(request.id, to, () => {
+				entry.viaHuman = true;
+				entry.deadline = Math.max(entry.deadline, Date.now() + config.escalation.humanTimeoutSeconds * 1000);
+			});
+			entry.cancel = waiting.cancel;
+			void waiting.promise.then((decision) => {
+				const outcome: EscalationOutcome = {
+					decision: decision.decision,
+					reason: decision.reason,
+					by: decision.by,
+					transport,
+					viaHuman: entry.viaHuman,
+					latencyMs: Date.now() - started,
+				};
+				entry.outcome = outcome;
+				// The retry that uses the decision has the escalation timeout to come.
+				entry.deadline = Date.now() + config.escalation.timeoutSeconds * 1000;
+				remember(escalationRecord(toolName, outcome, Date.now()));
+				if (key.startsWith(AGENT_KEY)) deferred.delete(key);
+			});
+			deferred.set(key, entry);
+			ctx.ui.setStatus(STATUS_KEY, `jev: waiting on ${transport}`);
+			return entry;
+		} catch (error) {
+			const message = redact(error instanceof Error ? error.message : String(error));
+			remember(escalationRecord(toolName, { fallback: message, transport, latencyMs: Date.now() - started }, Date.now()));
+			ctx.ui.setStatus(STATUS_KEY, statusText());
+			notifyError(ctx, new Error(`escalation over ${transport}: ${message}; using the local rule`));
+			return undefined;
+		}
+	}
+
+	/** What the model reads in place of the orchestrator's raw reply. */
+	function replyNote(match: ReplyMatch): string {
+		const entry = [...deferred.values()].find((pending) => pending.requestId === match.requestId);
+		const { decision, by } = match.decision;
+		const why = match.decision.reason ? `: ${match.decision.reason}` : "";
+		if (entry?.toolName === ESCALATE_TOOL) {
+			if (decision === "escalate") {
+				return `[pi-jev] ${by} passed your jev_escalate request ${match.requestId} to a human. End your turn and wait; the decision comes as a later message.`;
+			}
+			return `[pi-jev] ${by} ${decision === "approve" ? "approved" : "denied"} your jev_escalate request ${match.requestId}${why}.${decision === "deny" ? " Do not take the action; adjust the plan or ask the user." : ""}`;
+		}
+		const call = entry ? `the flagged \`${entry.toolName}\` call` : `escalation ${match.requestId}`;
+		if (decision === "escalate") {
+			return `[pi-jev] ${by} passed ${call} to a human. End your turn and wait; the decision comes as a later message.`;
+		}
+		if (decision === "approve") {
+			return `[pi-jev] ${by} approved ${call}${why}. Retry that exact call now; a changed call needs a new decision.`;
+		}
+		return `[pi-jev] ${by} denied ${call}${why}. Do not retry it; adjust the plan or ask the user.`;
 	}
 
 	/**
@@ -833,7 +1011,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		name: ESCALATE_TOOL,
 		label: "Escalate",
 		description:
-			"Ask the orchestrator managing this agent (a Pi parent, Traycer, or an A2A orchestrator) to decide something before you act. Blocks until it approves or denies; it may hand the question to a human first.",
+			"Ask the orchestrator managing this agent (a Pi parent, Traycer, or an A2A orchestrator) to decide something before you act. Blocks until it approves or denies; it may hand the question to a human first. Over Traycer it returns at once, and the decision arrives as your next message.",
 		promptSnippet:
 			"Ask your orchestrator to approve or deny an action before you take it",
 		promptGuidelines: [
@@ -863,6 +1041,26 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				cwd: ctx.cwd,
 				at: Date.now(),
 			};
+			if (escalator.send) {
+				const sent = await sendDeferred(
+					request,
+					ESCALATE_TOOL,
+					`${AGENT_KEY}${request.id}`,
+					escalator.send.bind(escalator),
+					escalator.name,
+					ctx,
+				);
+				const text =
+					sent === UNSAFE
+						? `not sent: ${UNSAFE_REASON}. Leave the credential out of the question, or ask the user.`
+						: sent
+							? `asked ${sent.to}, request ${sent.requestId}. End your turn now and wait: the decision arrives as your next message. Do not take the action unless it is approved.`
+							: "no decision: the orchestrator could not be reached. Ask the user before taking the action.";
+				return {
+					content: [{ type: "text" as const, text: `jev_escalate: ${text}` }],
+					details: { ok: sent !== undefined && sent !== UNSAFE, pending: sent && sent !== UNSAFE ? sent.requestId : undefined },
+				};
+			}
 			const result = await runEscalation(request, ESCALATE_TOOL, ctx, signal);
 			const outcome = result === UNSAFE ? undefined : result;
 			const text =
