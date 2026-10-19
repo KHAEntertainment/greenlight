@@ -36,9 +36,12 @@ Asked: "fix it", after a live Traycer probe showed the escalation reaching the p
 The model still followed the gate's text and did not retry, and `src/math.ts` stayed. Fixes:
 - `jev-deferred` session entries hold the pending wait: request id, recipient, deadline, and a SHA-256 slot of the judgment key, never the call's text. `restoreDeferred` re-registers them at `session_start`, but only when the recipient is still the current parent.
 - Decisions are never stored, so a hand-edited session cannot forge an approval.
-- The header is the first header-shaped line.
+- The header is the first line, or the first line after Traycer's `# Workspace Directories` preamble. A header-shaped line anywhere else is rejected.
+- A deferred request id is `sha256(slot:nonce)`, and restore re-checks it. A hand-edited entry can't attach an id the parent approved for one call to another call's slot. (Both points came from automated security review.)
 
-Tests: 154 pass. Typecheck and lint are clean.
+Tests: 155 pass. Typecheck and lint are clean.
+
+**Probe 5 (agent de7e332f):** no gate test. Its model refused the command, inspected the repo, and noticed it has no remote. Model behavior, not the extension.
 
 Pick up here: reinstall `claude/traycer-reply-via-input` in the sandbox, start a fresh Traycer Pi child, and repeat the deny probe: expect `asked <parent>` first, then `denied by <parent>` on the retry. An approve probe needs a permission rule for `traycer_send_message` in the parent's Claude Code session, because the auto-mode classifier blocked approvals there.
 

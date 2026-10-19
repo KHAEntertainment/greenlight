@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
@@ -113,11 +113,21 @@ const DEFERRED_TYPE = "jev-deferred";
 const DEFERRED_RESTORE_LIMIT = 50;
 
 type DeferredData =
-	| { state: "pending"; requestId: string; slot: string; toolName: string; to: string; sentAt: number; deadline: number; viaHuman: boolean }
+	| { state: "pending"; requestId: string; slot: string; nonce: string; toolName: string; to: string; sentAt: number; deadline: number; viaHuman: boolean }
 	| { state: "settled"; requestId: string };
 
 function slotOf(key: string): string {
 	return createHash("sha256").update(key).digest("hex");
+}
+
+/**
+ * A deferred request's id, bound to the call it is about. The parent decides
+ * on this id after seeing that call; a hand-edited session entry pairing the
+ * id with another call's slot fails the check on restore.
+ */
+function boundRequestId(slot: string, nonce: string): string {
+	const hex = createHash("sha256").update(`${slot}:${nonce}`).digest("hex");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 function parseDeferredData(value: unknown): DeferredData | undefined {
@@ -128,19 +138,23 @@ function parseDeferredData(value: unknown): DeferredData | undefined {
 	if (state === "settled") return { state, requestId };
 	if (state !== "pending") return undefined;
 	const slot = Reflect.get(value, "slot");
+	const nonce = Reflect.get(value, "nonce");
 	const toolName = Reflect.get(value, "toolName");
 	const to = Reflect.get(value, "to");
 	const sentAt = Reflect.get(value, "sentAt");
 	const deadline = Reflect.get(value, "deadline");
-	if (typeof slot !== "string" || typeof toolName !== "string" || typeof to !== "string" || !to) return undefined;
+	if (typeof slot !== "string" || typeof nonce !== "string" || typeof toolName !== "string" || typeof to !== "string" || !to) return undefined;
 	if (typeof sentAt !== "number" || typeof deadline !== "number") return undefined;
-	return { state, requestId, slot, toolName, to, sentAt, deadline, viaHuman: Reflect.get(value, "viaHuman") === true };
+	if (boundRequestId(slot, nonce) !== requestId) return undefined;
+	return { state, requestId, slot, nonce, toolName, to, sentAt, deadline, viaHuman: Reflect.get(value, "viaHuman") === true };
 }
 
 /** A request sent over a deferred transport, waiting for or holding its decision. */
 interface Deferred {
 	/** SHA-256 of the judgment key, so the session never holds the call's text twice. */
 	slot: string;
+	/** With `slot`, derives `requestId` (`boundRequestId`). */
+	nonce: string;
 	requestId: string;
 	toolName: string;
 	transport: string;
@@ -609,7 +623,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		transport: string,
 		ctx: ExtensionContext,
 	): Promise<Deferred | typeof UNSAFE | undefined> {
-		const scrubbed = scrubSecrets(request, redact);
+		const slot = slotOf(key);
+		const nonce = randomUUID();
+		const scrubbed = scrubSecrets({ ...request, id: boundRequestId(slot, nonce) }, redact);
 		if (scrubbed.unsafe) {
 			remember(escalationRecord(toolName, { fallback: UNSAFE_REASON, transport, latencyMs: 0 }, Date.now()));
 			ctx.ui.notify(`jev: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
@@ -620,8 +636,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		try {
 			const { to } = await send(scrubbed.value, ctx.signal);
 			const entry: Deferred = {
-				slot: slotOf(key),
-				requestId: request.id,
+				slot,
+				nonce,
+				requestId: scrubbed.value.id,
 				toolName,
 				transport,
 				to,
@@ -675,6 +692,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			state: "pending",
 			requestId: entry.requestId,
 			slot: entry.slot,
+			nonce: entry.nonce,
 			toolName: entry.toolName,
 			to: entry.to,
 			sentAt: entry.sentAt,

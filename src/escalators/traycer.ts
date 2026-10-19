@@ -97,11 +97,13 @@ export interface ReplyInbox {
  * Traycer's prompt header names the sender, as
  * `Agent message from <title> (agent <id>) [harness]` or
  * `[traycer:agent-message] from <title> (agent <id>) [harness]`. It is the
- * first header-shaped line: Traycer may put its own preamble (`# Workspace
- * Directories …`) above it, and the sender's text only below it. The title
+ * first line, or the first line after Traycer's own `# Workspace
+ * Directories` preamble; the sender's text only comes below it. The title
  * is the sender's to choose, so the id is the last `(agent …)` before the
  * harness tag.
  */
+const PREAMBLE = "# Workspace Directories";
+const PREAMBLE_LEAD = "Your primary working directory is ";
 const HEADER_START = /^(?:Agent message|\[traycer:agent-message\]) from /;
 const HEADER = /^(?:Agent message|\[traycer:agent-message\]) from .*\(agent ([0-9A-Za-z][0-9A-Za-z-]{3,})\) \[[^\]\n]+\]\s*$/;
 
@@ -111,9 +113,24 @@ const HEADER = /^(?:Agent message|\[traycer:agent-message\]) from .*\(agent ([0-
  * message has no agent header at all (typed by the local user).
  */
 function headerSender(text: string): string | null | undefined {
-	const line = text.split("\n").find((candidate) => HEADER_START.test(candidate));
-	if (line === undefined) return undefined;
-	return HEADER.exec(line)?.[1] ?? null;
+	const lines = text.split("\n");
+	const at = headerIndex(lines);
+	const line = lines[at] ?? "";
+	if (HEADER_START.test(line)) return HEADER.exec(line)?.[1] ?? null;
+	// A header-shaped line anywhere else is not where Traycer puts one.
+	return lines.some((candidate) => HEADER_START.test(candidate)) ? null : undefined;
+}
+
+/** Where Traycer's header sits: line 0, or the first line after its workspace preamble. */
+function headerIndex(lines: string[]): number {
+	if (!lines[0]?.startsWith(PREAMBLE)) return 0;
+	let index = 1;
+	while (index < lines.length) {
+		const line = lines[index] ?? "";
+		if (line.trim() === "" || line.startsWith(PREAMBLE_LEAD) || line.startsWith("- `")) index += 1;
+		else break;
+	}
+	return index;
 }
 
 export interface ReplyMatch {
