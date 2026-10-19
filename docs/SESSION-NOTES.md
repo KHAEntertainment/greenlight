@@ -16,6 +16,13 @@ PR #1 is merged (12db2a5). Local testing started in a separate sandbox project, 
 
 Verified live, before the extension change, with the same definition and the user's key: `git status --short` passed (clear, 881 ms), and `rm -rf src && git push --force origin main` was flagged (destructive 0.98, beyond_scope 0.98, impact 2.99/3, 229 ms).
 
+Verified end to end after the change, with the branch installed in the sandbox and pi driven over RPC (`pi --mode rpc --approve`):
+- Startup notes the built-in definition. Status: shadow, auth `apiKeyFile`.
+- `/jev check git status --short` is clear (destructive 0.02, impact 0.00/3).
+- `/jev check rm -rf src && git push --force origin main` is flagged (destructive 0.98, impact 3.00/3).
+
+Pick up here: try `enforce` in the sandbox, then decide whether to report the catalog gap upstream to pi.
+
 Tests: 141 pass (7 added). Typecheck and lint are clean.
 
 ---
