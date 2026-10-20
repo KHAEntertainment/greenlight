@@ -21,8 +21,9 @@ It works with:
 - **[Traycer](https://traycer.ai)**, the first supported agentic development environment (ADE). A helper agent's flagged command goes straight to its parent agent in Traycer.
 - **A parent Pi agent**, when one Pi runs another.
 - **Any orchestrator that speaks [A2A](https://a2a-protocol.org)**, the open agent-to-agent protocol.
+- **You**, if you're working one-on-one with an agent.
 
-More ADEs, such as Orca and Xirp, may follow in future releases.
+More ADEs, such as Orca and Xirp, will be tested and verified in future releases.
 
 pi-jev2 also lets you reach Jev through the provider you already use: TypeSafe, OpenRouter, Cloudflare, Vercel, or OpenCode.
 
