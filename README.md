@@ -1,22 +1,32 @@
 # pi-jev2
 
-**Stop your coding agent before it does something you'll regret.**
+**When your coding agent tries something risky, it asks its boss first.**
 
 ## The problem
 
-You let an AI agent work in your repo and step away. It's fixing a test. It decides the fastest fix is to delete a folder and force-push to `main`. Or it prints your API keys into the chat. By the time you look, it's done.
+You let AI agents work in your repo and step away. One of them is fixing a test, and decides the fastest fix is to delete a folder and force-push to `main`.
 
-If you run several agents at once, each managed by another agent, nobody is watching at all.
+[pi-jev](https://github.com/y0usaf/pi-jev) already catches that for [Pi](https://github.com/earendil-works/pi). Before a risky command runs, it asks a fast decision model ([Jev](https://docs.typesafe.ai)) whether it's a good idea, then warns you or asks you to confirm.
+
+That works when you're at the keyboard. More and more, you aren't. Agents run under other agents: an orchestrator splits the work and hands pieces to helpers. When a helper's command gets flagged, a warning goes unread and a confirm prompt waits forever. The safety check either does nothing or freezes the work.
 
 ## The solution
 
-pi-jev2 checks every risky command your [Pi](https://github.com/earendil-works/pi) agent is about to run, before it runs.
+pi-jev2 sends the decision up the chain of command.
 
-- **It catches the bad ones.** Deleting files, force-pushing, sending data off your machine, going beyond what you asked for.
-- **It's fast and cheap.** The check takes about a third of a second, using a small decision model built for yes-or-no calls ([Jev](https://docs.typesafe.ai)).
-- **It works with no one watching.** When the agent works for another agent, pi-jev2 asks that agent to approve or deny, instead of waiting for you.
-- **It catches leaks after the fact.** If a command prints a password or key, it warns the agent not to repeat it.
-- **It never gets in your way when it breaks.** If the check itself fails, your agent keeps working.
+When a command looks risky, pi-jev2 pauses it and asks the agent's orchestrator: approve, deny, or ask a human. The orchestrator knows the plan, so it can tell a planned cleanup from a mistake. If it doesn't answer in time, you're asked instead, the same as in pi-jev.
+
+It works with:
+
+- **[Traycer](https://traycer.ai)**, the first supported agentic development environment (ADE). A helper agent's flagged command goes straight to its parent agent in Traycer.
+- **A parent Pi agent**, when one Pi runs another.
+- **Any orchestrator that speaks [A2A](https://a2a-protocol.org)**, the open agent-to-agent protocol.
+
+More ADEs, such as Orca and Xirp, may follow in future releases.
+
+pi-jev2 also lets you reach Jev through the provider you already use: TypeSafe, OpenRouter, Cloudflare, Vercel, or OpenCode.
+
+Everything pi-jev does is still here. It checks risky commands in about a third of a second, warns when a command prints a password, and never blocks your agent if the check itself fails.
 
 ## Try it in two minutes
 
@@ -26,24 +36,24 @@ pi-jev2 checks every risky command your [Pi](https://github.com/earendil-works/p
    pi install npm:@khaentertainment/pi-jev2
    ```
 
-2. Give it a key. Run `/login typesafe` in Pi, or set `TYPESAFE_API_KEY`. (OpenRouter and other providers work too.)
+2. Give it a key. Run `/login typesafe` in Pi, or set `TYPESAFE_API_KEY`.
 
 3. Keep working as usual. pi-jev2 starts by only warning you, so nothing gets blocked. Run `/jev log` to see what it caught.
 
-4. When you trust it, let it act:
+4. Running agents under Traycer or another orchestrator? Hand the decisions up the chain:
 
    ```
-   /jev mode enforce
+   /jev mode escalate
    ```
 
-   Now it asks you before a risky command runs.
+   Working alone? Use `/jev mode enforce` to be asked before risky commands run.
 
-**[Install pi-jev2 now](https://www.npmjs.com/package/@khaentertainment/pi-jev2)**, and see what your agent has been up to.
+**[Install pi-jev2 now](https://www.npmjs.com/package/@khaentertainment/pi-jev2)**, and give your agents a boss to answer to.
 
 ## Want the details?
 
-Providers, settings, orchestrator setups, and the measurements behind every threshold are in the [reference guide](https://github.com/KHAEntertainment/pi-jev2/blob/main/docs/REFERENCE.md).
+Orchestrator setup, providers, settings, and the measurements behind every threshold are in the [reference guide](https://github.com/KHAEntertainment/pi-jev2/blob/main/docs/REFERENCE.md).
 
 ---
 
-Built on [y0usaf/pi-jev](https://github.com/y0usaf/pi-jev). MIT licensed.
+A fork of [y0usaf/pi-jev](https://github.com/y0usaf/pi-jev), which built the command check this is based on. MIT licensed.
