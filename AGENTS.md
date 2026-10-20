@@ -24,10 +24,6 @@ Maintainer rules for this repository.
 ## Publishing
 
 - A GitHub release publishes from `.github/workflows/publish.yml` using trusted publishing (OIDC), so the repo holds no npm token and no OTP is involved.
-- One-time setup (TODO, owner only):
-  1. Create the `@khaentertainment` scope on npm.
-  2. Bootstrap the package with one authenticated publish. npm cannot attach a trusted publisher to a package that does not exist yet.
-  3. On npmjs.com, open the package settings and add a Trusted Publisher: user `KHAEntertainment`, repository `pi-jev2`, workflow `publish.yml`, environment empty.
-
-  See `PUBLISHING.md`.
+- The one-time setup is done (2026-10-20): the scope exists, `0.4.0` was bootstrapped by hand, the trusted publisher is saved with npm publish allowed and dist-tag not allowed, and publishing access requires 2FA and disallows tokens. State and the release steps are in `PUBLISHING.md`.
+- Never publish by hand again or add an npm token to the repo or workflow. A release goes through a version bump, a merge, and a GitHub release.
 - The package name is scoped (`@khaentertainment/pi-jev2`) so it can sit next to the upstream `@y0usaf/pi-jev` without a name clash.

@@ -1,25 +1,48 @@
 # Publishing
 
-> **Fork note (0.4.0).** This repository now publishes `@khaentertainment/pi-jev2`
-> from `KHAEntertainment/pi-jev2`. None of the steps below has been done for
-> the new name yet. They go in this order:
->
-> 1. **Create the `@khaentertainment` scope** on npmjs.com, as a user or an organization.
-> 2. **Bootstrap the package with one authenticated publish.** npm can configure a
->    trusted publisher only for a package that already exists. From the owner's
->    machine, logged in with 2FA (a passkey or security key), run
->    `npm publish --access public` on the release commit. Do not use a bypass
->    token: as the history below explains, npm restricts them for direct
->    publishing.
-> 3. **Configure the trusted publisher** on the package's settings page: user
->    `KHAEntertainment`, repository `pi-jev2`, workflow `publish.yml`, environment
->    empty. Then set publishing access to "Require two-factor authentication and
->    disallow tokens".
-> 4. **Later releases publish from the GitHub release workflow** with no secret.
->
-> The history below is upstream's, kept for the method. When following it, read
-> `@y0usaf/pi-jev` as `@khaentertainment/pi-jev2` and `y0usaf`/`pi-jev` as
-> `KHAEntertainment`/`pi-jev2`.
+## State, verified 2026-10-20
+
+`@khaentertainment/pi-jev2` publishes from `KHAEntertainment/pi-jev2` through
+trusted publishing (OIDC), with no token anywhere.
+
+| Step | State |
+|---|---|
+| `@khaentertainment` scope | Exists: an npm organization owned by `bbrenner2217`. |
+| Bootstrap publish | Done: `0.4.0` was published by hand on 2026-10-20 from `main` at `a2050d7`, by `bbrenner2217` with passkey 2FA (`auth-and-writes`). It has no provenance attestation, because it did not come from the workflow. |
+| Trusted publisher | Saved on the package's settings page: user `KHAEntertainment`, repository `pi-jev2`, workflow `publish.yml`, environment empty. **Allow npm publish** is on; **allow npm dist-tag** is off. |
+| Publishing access | "Require two-factor authentication and disallow tokens" (set by the owner 2026-10-20). The trusted publisher is the only way in without a passkey. |
+
+Notes:
+
+- The first publish was refused (`E403 Two-factor authentication … is
+  required`) until 2FA was turned on for the account. A granular token with
+  "bypass 2FA" was not used; see the history below.
+- The registry also lists `0.0.0-stage`. npm created it as a "temporary package
+  placeholder for staged publishing" when it registered the package name. It is
+  2 files, not tagged, and nothing installs it by default. Leave it alone.
+- The registry returned 404 for the package metadata for about 2 minutes after
+  the publish; the package already showed in `npm access list packages
+  @khaentertainment`. Wait before concluding a publish failed.
+- `npm dist-tag` is off because the workflow never runs it: `npm publish` sets
+  `latest` by itself. Turn it on only if the workflow starts moving tags such
+  as `next`.
+
+## Releasing
+
+1. Bump `version` in `package.json` past the last published version (next:
+   `0.4.1` or later; `0.4.0` is taken), merge to `main`.
+2. Publish a GitHub release for that commit. `.github/workflows/publish.yml`
+   runs on `release: published`, exchanges its OIDC token, and runs
+   `npm publish --access public` with provenance.
+3. If the publish step fails, read the `Preflight - OIDC trusted-publishing
+   check` step: it prints the registry's own answer, which `npm publish` hides.
+   A dry run is available from the Actions tab (`workflow_dispatch`, dry-run on).
+
+## Upstream history
+
+The history below is upstream's, kept for the method. When following it, read
+`@y0usaf/pi-jev` as `@khaentertainment/pi-jev2` and `y0usaf`/`pi-jev` as
+`KHAEntertainment`/`pi-jev2`.
 
 npm has one durable route left for this package: trusted publishing (OIDC) from
 `.github/workflows/publish.yml`. Classic tokens were revoked in November 2025,
@@ -27,7 +50,7 @@ TOTP 2FA is retired, and tokens that bypass 2FA are now restricted for direct
 publishing — so "publish locally with a bypass token" is not a fallback, it is a
 dead end. (The token still in `~/.npmrc` answers `401 Unauthorized`.)
 
-## State, verified 2026-09-19
+### Upstream state, verified 2026-09-19
 
 - **The trusted publisher is not configured.** A hand-run OIDC exchange for
   `@y0usaf/pi-jev` returns `OIDC token exchange error - package not found`, and
@@ -51,7 +74,7 @@ dead end. (The token still in `~/.npmrc` answers `401 Unauthorized`.)
   `dist.attestations`. The 0.2.0 release run failed with `E404`; the workflow was
   rewritten the next day but has only ever been exercised as a dry run.
 
-## The one-time setup, and who can do it
+### The one-time setup, and who can do it
 
 npmjs.com -> package `@y0usaf/pi-jev` -> Settings -> Trusted Publisher -> GitHub
 Actions:
