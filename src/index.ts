@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
 	ExtensionAPI,
@@ -42,7 +43,7 @@ import {
 } from "./escalation";
 import { a2aEscalator } from "./escalators/a2a";
 import { piRpcEscalator } from "./escalators/pi-rpc";
-import { traycerEscalator } from "./escalators/traycer";
+import { createReplyInbox, type ReplyMatch, traycerEscalator } from "./escalators/traycer";
 import {
 	buildGateState,
 	describeAnswers,
@@ -100,6 +101,71 @@ import {
 
 const STATUS_KEY = "jev";
 const ESCALATE_TOOL = "jev_escalate";
+/** Deferred-escalation key prefix for jev_escalate requests. */
+const AGENT_KEY = "agent:";
+/**
+ * Session entries for requests still waiting on a deferred transport. Pi
+ * may run each turn in a new process (Traycer does), and the reply arrives
+ * in the next turn, so the wait has to outlive the process. Only the wait
+ * is stored, never a decision: a decision is taken from the reply itself.
+ */
+const DEFERRED_TYPE = "jev-deferred";
+const DEFERRED_RESTORE_LIMIT = 50;
+
+type DeferredData =
+	| { state: "pending"; requestId: string; slot: string; nonce: string; toolName: string; to: string; sentAt: number; deadline: number; viaHuman: boolean }
+	| { state: "settled"; requestId: string };
+
+function slotOf(key: string): string {
+	return createHash("sha256").update(key).digest("hex");
+}
+
+/**
+ * A deferred request's id, bound to the call it is about. The parent decides
+ * on this id after seeing that call; a hand-edited session entry pairing the
+ * id with another call's slot fails the check on restore.
+ */
+function boundRequestId(slot: string, nonce: string): string {
+	const hex = createHash("sha256").update(`${slot}:${nonce}`).digest("hex");
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+}
+
+function parseDeferredData(value: unknown): DeferredData | undefined {
+	if (typeof value !== "object" || value === null) return undefined;
+	const requestId = Reflect.get(value, "requestId");
+	if (typeof requestId !== "string" || !requestId) return undefined;
+	const state = Reflect.get(value, "state");
+	if (state === "settled") return { state, requestId };
+	if (state !== "pending") return undefined;
+	const slot = Reflect.get(value, "slot");
+	const nonce = Reflect.get(value, "nonce");
+	const toolName = Reflect.get(value, "toolName");
+	const to = Reflect.get(value, "to");
+	const sentAt = Reflect.get(value, "sentAt");
+	const deadline = Reflect.get(value, "deadline");
+	if (typeof slot !== "string" || typeof nonce !== "string" || typeof toolName !== "string" || typeof to !== "string" || !to) return undefined;
+	if (typeof sentAt !== "number" || typeof deadline !== "number") return undefined;
+	if (boundRequestId(slot, nonce) !== requestId) return undefined;
+	return { state, requestId, slot, nonce, toolName, to, sentAt, deadline, viaHuman: Reflect.get(value, "viaHuman") === true };
+}
+
+/** A request sent over a deferred transport, waiting for or holding its decision. */
+interface Deferred {
+	/** SHA-256 of the judgment key, so the session never holds the call's text twice. */
+	slot: string;
+	/** With `slot`, derives `requestId` (`boundRequestId`). */
+	nonce: string;
+	requestId: string;
+	toolName: string;
+	transport: string;
+	to: string;
+	sentAt: number;
+	/** Waiting: when the enforce rule takes over. Decided: when the decision goes stale. */
+	deadline: number;
+	viaHuman: boolean;
+	outcome?: EscalationOutcome;
+	cancel(): void;
+}
 const ERROR_NOTIFY_INTERVAL_MS = 60_000;
 /** Identical output is judged once per window, keyed by tool and output hash. */
 const OUTPUT_CACHE_SECONDS = 120;
@@ -184,6 +250,16 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	/** One orchestrator question per identical pending call, shared by siblings. */
 	const escalations = new Map<string, Promise<EscalationOutcome | typeof UNSAFE | undefined>>();
 	/**
+	 * Escalations over a deferred transport (Traycer), by judgment key, or
+	 * `agent:<request id>` for jev_escalate. The request is sent and the call
+	 * blocked; the decision comes with a later prompt and is kept for one
+	 * retry of that exact call.
+	 */
+	const deferred = new Map<string, Deferred>();
+	const deferredSends = new Map<string, Promise<Deferred | typeof UNSAFE | undefined>>();
+	/** Decision notes pi queued during a run, until they start a user message. */
+	const queuedNotes = new Set<string>();
+	/**
 	 * `/jev last` and `/jev output` read these; they are journal records rather
 	 * than live verdicts so a rehydrated session renders the same text as a live
 	 * one. `journal` holds the records written this session (or reloaded from it).
@@ -193,6 +269,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	let journal: JournalRecord[] = [];
 	let lastErrorAt = 0;
 	const warnedOnce = new Set<string>();
+
+	/** Traycer delivers the parent's decision as chat input; see `createReplyInbox`. */
+	const traycerReplies = createReplyInbox();
 
 	function reload(cwd: string): void {
 		loaded = loadJevConfig(cwd);
@@ -286,6 +365,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 						parentAgentId: config.escalation.traycer.parentAgentId,
 						pollMs: config.escalation.pollMs,
 						env: process.env,
+						replies: traycerReplies,
 					},
 				);
 			case "a2a": {
@@ -323,6 +403,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		// A reload, resume, or fork rebuilds this closure from nothing, so the
 		// session's own entries are the only record of what already fired.
 		journal = readJournal(ctx);
+		await restoreDeferred(ctx);
 		last = newestRecord(journal, "gate");
 		lastOutput = newestRecord(journal, "output");
 		for (const warning of loaded.warnings) {
@@ -360,6 +441,33 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus(STATUS_KEY, statusText());
 	});
 
+	// A decision on a pending escalation is the gate's: the gate records it,
+	// and the model reads a note saying what to do, never the raw reply.
+	pi.on("input", (event) => {
+		const match = traycerReplies.offer(event.text);
+		if (!match) return { action: "continue" };
+		const note = replyNote(match);
+		if (event.streamingBehavior) queuedNotes.add(note);
+		return { action: "transform", text: note };
+	});
+
+	// Pi checks its queue once before a run settles. A note queued after that
+	// check (Traycer delivers as soon as the last message ends) never becomes
+	// a turn, and the agent would sit idle with its decision unread.
+	pi.on("message_start", (event) => {
+		if (event.message.role === "user") queuedNotes.delete(messageText(event.message.content) ?? "");
+	});
+	pi.on("agent_settled", (event) => {
+		if (event.aborted || queuedNotes.size === 0) return;
+		const notes = [...queuedNotes].join("\n\n");
+		queuedNotes.clear();
+		try {
+			pi.sendUserMessage(notes);
+		} catch {
+			// The decision is still recorded; the agent sees it on its next turn.
+		}
+	});
+
 	pi.on("tool_call", async (event, ctx) => {
 		if (!gateOn || inactive) return;
 		if (!config.gate.tools.includes(event.toolName)) return;
@@ -388,6 +496,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		if (mode === "escalate") {
+			const escalator = escalatorFor(ctx);
+			if (escalator?.send) {
+				return deferredDecision(key, event, verdict, reason, escalator.send.bind(escalator), escalator.name, ctx);
+			}
 			const outcome = await escalationFor(key, event, verdict, ctx);
 			if (outcome === UNSAFE) {
 				// Not an outage: the call itself carries a credential mixed with
@@ -456,6 +568,245 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		).finally(() => escalations.delete(key));
 		escalations.set(key, promise);
 		return promise;
+	}
+
+	/**
+	 * Escalate mode over a deferred transport. The first flagged call sends
+	 * the request and is blocked while the orchestrator decides; the turn
+	 * ends, the decision arrives as the next prompt, and a retry of the same
+	 * call uses it once. No answer in time falls back to the enforce rule.
+	 */
+	async function deferredDecision(
+		key: string,
+		event: { toolName: string; input: unknown },
+		verdict: GateVerdict,
+		reason: string,
+		send: NonNullable<Escalator["send"]>,
+		transport: string,
+		ctx: ExtensionContext,
+	): Promise<{ block: true; reason: string } | undefined> {
+		const now = Date.now();
+		const slot = slotOf(key);
+		const entry = deferred.get(slot);
+		if (entry?.outcome) {
+			deferred.delete(slot);
+			if (now <= entry.deadline) {
+				if (entry.outcome.decision === "approve") {
+					ctx.ui.notify(`jev: ${event.toolName} ${describeOutcome(entry.outcome)}`, "info");
+					return undefined;
+				}
+				return { block: true, reason: `${reason} (${describeOutcome(entry.outcome)})` };
+			}
+			// A decision nobody used in time is stale: ask again.
+		} else if (entry && now < entry.deadline) {
+			return { block: true, reason: `${reason} (${waitingText(entry)})` };
+		} else if (entry) {
+			// No answer in time: the enforce rule decides, as for any transport.
+			entry.cancel();
+			deferred.delete(slot);
+			writeDeferred({ state: "settled", requestId: entry.requestId });
+			remember(
+				escalationRecord(
+					event.toolName,
+					{ fallback: "escalation timed out", transport: entry.transport, latencyMs: now - entry.sentAt },
+					now,
+				),
+			);
+			ctx.ui.setStatus(STATUS_KEY, statusText());
+			return localDecision(event.toolName, verdict, reason, ctx);
+		}
+		let inflight = deferredSends.get(key);
+		if (!inflight) {
+			inflight = sendDeferred(gateRequest(event, verdict, ctx), event.toolName, key, send, transport, ctx).finally(() =>
+				deferredSends.delete(key),
+			);
+			deferredSends.set(key, inflight);
+		}
+		const sent = await inflight;
+		if (sent === UNSAFE) {
+			// Same rule as an in-turn escalation: headless blocks (see tool_call).
+			return localDecision(event.toolName, verdict, `${reason} (not escalated: ${UNSAFE_REASON})`, ctx, true);
+		}
+		if (!sent) return localDecision(event.toolName, verdict, reason, ctx);
+		return { block: true, reason: `${reason} (${waitingText(sent)})` };
+	}
+
+	function waitingText(entry: Deferred): string {
+		return `asked ${entry.to} for a decision, request ${entry.requestId}. End your turn now and wait: the decision arrives as your next message. Retry this exact call only if it is approved`;
+	}
+
+	/** Send over a deferred transport and record what to expect back. */
+	async function sendDeferred(
+		request: EscalationRequest,
+		toolName: string,
+		key: string,
+		send: NonNullable<Escalator["send"]>,
+		transport: string,
+		ctx: ExtensionContext,
+	): Promise<Deferred | typeof UNSAFE | undefined> {
+		settleExpiredAsks();
+		const slot = slotOf(key);
+		const nonce = randomUUID();
+		const scrubbed = scrubSecrets({ ...request, id: boundRequestId(slot, nonce) }, redact);
+		if (scrubbed.unsafe) {
+			remember(escalationRecord(toolName, { fallback: UNSAFE_REASON, transport, latencyMs: 0 }, Date.now()));
+			ctx.ui.notify(`jev: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
+			return UNSAFE;
+		}
+		if (scrubbed.redacted) scrubbed.value.redacted = true;
+		const started = Date.now();
+		try {
+			const { to } = await send(scrubbed.value, ctx.signal);
+			const entry: Deferred = {
+				slot,
+				nonce,
+				requestId: scrubbed.value.id,
+				toolName,
+				transport,
+				to,
+				sentAt: started,
+				deadline: Date.now() + config.escalation.timeoutSeconds * 1000,
+				viaHuman: false,
+				cancel: () => undefined,
+			};
+			trackDeferred(entry);
+			persistDeferred(entry);
+			ctx.ui.setStatus(STATUS_KEY, `jev: waiting on ${transport}`);
+			return entry;
+		} catch (error) {
+			const message = redact(error instanceof Error ? error.message : String(error));
+			remember(escalationRecord(toolName, { fallback: message, transport, latencyMs: Date.now() - started }, Date.now()));
+			ctx.ui.setStatus(STATUS_KEY, statusText());
+			notifyError(ctx, new Error(`escalation over ${transport}: ${message}; using the local rule`));
+			return undefined;
+		}
+	}
+
+	/** Wait for the reply to `entry`, and record the decision when it comes. */
+	function trackDeferred(entry: Deferred): void {
+		const waiting = traycerReplies.expect(entry.requestId, entry.to, () => {
+			entry.viaHuman = true;
+			entry.deadline = Math.max(entry.deadline, Date.now() + config.escalation.humanTimeoutSeconds * 1000);
+			persistDeferred(entry);
+		});
+		entry.cancel = waiting.cancel;
+		void waiting.promise.then((decision) => {
+			const outcome: EscalationOutcome = {
+				decision: decision.decision,
+				reason: decision.reason,
+				by: decision.by,
+				transport: entry.transport,
+				viaHuman: entry.viaHuman,
+				latencyMs: Date.now() - entry.sentAt,
+			};
+			entry.outcome = outcome;
+			// The retry that uses the decision has the escalation timeout to come.
+			entry.deadline = Date.now() + config.escalation.timeoutSeconds * 1000;
+			remember(escalationRecord(entry.toolName, outcome, Date.now()));
+			writeDeferred({ state: "settled", requestId: entry.requestId });
+			if (entry.toolName === ESCALATE_TOOL) deferred.delete(entry.slot);
+		});
+		deferred.set(entry.slot, entry);
+	}
+
+	function persistDeferred(entry: Deferred): void {
+		writeDeferred({
+			state: "pending",
+			requestId: entry.requestId,
+			slot: entry.slot,
+			nonce: entry.nonce,
+			toolName: entry.toolName,
+			to: entry.to,
+			sentAt: entry.sentAt,
+			deadline: entry.deadline,
+			viaHuman: entry.viaHuman,
+		});
+	}
+
+	/** Fail open like the journal: an unwritable session only loses the wait. */
+	function writeDeferred(data: DeferredData): void {
+		try {
+			pi.appendEntry(DEFERRED_TYPE, data);
+		} catch {
+			// The next retry then asks again.
+		}
+	}
+
+	/**
+	 * Pick up requests a previous process left waiting. Session entries are
+	 * hand-editable, so an entry is restored only when its recipient is the
+	 * parent this agent has now: a forged entry cannot name another sender.
+	 */
+	async function restoreDeferred(ctx: ExtensionContext): Promise<void> {
+		if (mode !== "escalate") return;
+		const waiting = new Map<string, Extract<DeferredData, { state: "pending" }>>();
+		try {
+			for (const entry of ctx.sessionManager.getEntries()) {
+				if (typeof entry !== "object" || entry === null) continue;
+				if (Reflect.get(entry, "type") !== "custom" || Reflect.get(entry, "customType") !== DEFERRED_TYPE) continue;
+				const data = parseDeferredData(Reflect.get(entry, "data"));
+				if (!data) continue;
+				if (data.state === "settled") waiting.delete(data.requestId);
+				else waiting.set(data.requestId, data);
+			}
+		} catch {
+			return;
+		}
+		if (waiting.size === 0) return;
+		const escalator = escalatorFor(ctx);
+		if (!escalator?.send || !escalator.recipient) return;
+		let parent: string;
+		try {
+			parent = await escalator.recipient(ctx.signal);
+		} catch {
+			return;
+		}
+		for (const data of [...waiting.values()].slice(-DEFERRED_RESTORE_LIMIT)) {
+			if (data.to !== parent || deferred.has(data.slot)) continue;
+			// No retry ever settles a jev_escalate wait, so an expired one would linger.
+			if (data.toolName === ESCALATE_TOOL && Date.now() >= data.deadline) {
+				writeDeferred({ state: "settled", requestId: data.requestId });
+				continue;
+			}
+			trackDeferred({ ...data, transport: escalator.name, cancel: () => undefined });
+		}
+	}
+
+	/**
+	 * Drop jev_escalate waits past their deadline. A gate wait is settled by
+	 * the retry that finds it expired; nothing retries a jev_escalate, and a
+	 * stale wait would count as pending, so an id-less reply to a live
+	 * request would see two candidates and be refused.
+	 */
+	function settleExpiredAsks(): void {
+		const now = Date.now();
+		for (const entry of [...deferred.values()]) {
+			if (entry.toolName !== ESCALATE_TOOL || entry.outcome || now < entry.deadline) continue;
+			entry.cancel();
+			deferred.delete(entry.slot);
+			writeDeferred({ state: "settled", requestId: entry.requestId });
+		}
+	}
+
+	/** What the model reads in place of the orchestrator's raw reply. */
+	function replyNote(match: ReplyMatch): string {
+		const entry = [...deferred.values()].find((pending) => pending.requestId === match.requestId);
+		const { decision, by } = match.decision;
+		const why = match.decision.reason ? `: ${match.decision.reason}` : "";
+		if (entry?.toolName === ESCALATE_TOOL) {
+			if (decision === "escalate") {
+				return `[pi-jev] ${by} passed your jev_escalate request ${match.requestId} to a human. End your turn and wait; the decision comes as a later message.`;
+			}
+			return `[pi-jev] ${by} ${decision === "approve" ? "approved" : "denied"} your jev_escalate request ${match.requestId}${why}.${decision === "deny" ? " Do not take the action; adjust the plan or ask the user." : ""}`;
+		}
+		const call = entry ? `the flagged \`${entry.toolName}\` call` : `escalation ${match.requestId}`;
+		if (decision === "escalate") {
+			return `[pi-jev] ${by} passed ${call} to a human. End your turn and wait; the decision comes as a later message.`;
+		}
+		if (decision === "approve") {
+			return `[pi-jev] ${by} approved ${call}${why}. Retry that exact call now; a changed call needs a new decision.`;
+		}
+		return `[pi-jev] ${by} denied ${call}${why}. Do not retry it; adjust the plan or ask the user.`;
 	}
 
 	/**
@@ -826,7 +1177,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		name: ESCALATE_TOOL,
 		label: "Escalate",
 		description:
-			"Ask the orchestrator managing this agent (a Pi parent, Traycer, or an A2A orchestrator) to decide something before you act. Blocks until it approves or denies; it may hand the question to a human first.",
+			"Ask the orchestrator managing this agent (a Pi parent, Traycer, or an A2A orchestrator) to decide something before you act. Blocks until it approves or denies; it may hand the question to a human first. Over Traycer it returns at once, and the decision arrives as your next message.",
 		promptSnippet:
 			"Ask your orchestrator to approve or deny an action before you take it",
 		promptGuidelines: [
@@ -856,6 +1207,26 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				cwd: ctx.cwd,
 				at: Date.now(),
 			};
+			if (escalator.send) {
+				const sent = await sendDeferred(
+					request,
+					ESCALATE_TOOL,
+					`${AGENT_KEY}${request.id}`,
+					escalator.send.bind(escalator),
+					escalator.name,
+					ctx,
+				);
+				const text =
+					sent === UNSAFE
+						? `not sent: ${UNSAFE_REASON}. Leave the credential out of the question, or ask the user.`
+						: sent
+							? `asked ${sent.to}, request ${sent.requestId}. End your turn now and wait: the decision arrives as your next message. Do not take the action unless it is approved.`
+							: "no decision: the orchestrator could not be reached. Ask the user before taking the action.";
+				return {
+					content: [{ type: "text" as const, text: `jev_escalate: ${text}` }],
+					details: { ok: sent !== undefined && sent !== UNSAFE, pending: sent && sent !== UNSAFE ? sent.requestId : undefined },
+				};
+			}
 			const result = await runEscalation(request, ESCALATE_TOOL, ctx, signal);
 			const outcome = result === UNSAFE ? undefined : result;
 			const text =

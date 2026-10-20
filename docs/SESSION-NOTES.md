@@ -6,6 +6,64 @@ where to pick up. Append a new entry when you stop.
 
 ---
 
+## 2026-10-19: local session 1, Traycer replies arrive as chat input
+
+Asked: "fix it", after a live Traycer probe showed the escalation reaching the parent but the parent's deny never reaching the gate.
+
+**What the live probe showed (Traycer 1.5.1).** A Pi child agent in the sandbox ran `rm -rf src && git push --force origin main` in escalate mode. The gate flagged it (destructive 0.97, impact 2.86/3) and the escalation reached the parent agent. The parent replied deny with the `responseId`. The child's tool result was `(declined)`, the local confirm fallback, because:
+- Traycer delivers a reply into the child's conversation as a new prompt, headed `Agent message from <title> (agent <id>) [harness]`.
+- `traycer agent inbox` is only a recovery buffer: it was empty for the child, and its entries carry no `responseId`.
+- `nextCursor` is an object `{createdAt, eventId}`, not a string, so the old cursor parse never advanced.
+
+**Fix.** `createReplyInbox` in `src/escalators/traycer.ts`, one per extension instance (`src/index.ts`). The escalator registers the request it waits on; a `pi.on("input")` handler offers each incoming message, and a match resolves the wait and returns `{action: "handled"}`, so the model never sees the decision. A match is the request `id` in the reply JSON (the request message now asks for it), or, with no id and only for deny or escalate, Traycer's header naming the parent while exactly one request waits on it; an approve must carry the id. The sender is read only from the first-line header, as the last `(agent …)` before the harness tag, because the title is the sender's to choose. A message whose first line starts like an agent header but does not parse is rejected, not treated as typed by the local user. A header naming another agent is rejected, so the agent cannot answer itself through `traycer agent send`. (Both tightenings came from an automated security review of the first commit.) `escalate` extends the wait as before. The inbox poll stays as a backup and is raced against the input path; an inbox read error no longer ends the wait when the input path exists. The object cursor becomes `--after createdAt:eventId`.
+
+**Live re-test (probe 3, agent 5cd676ff, first commit of PR #3): the input path does not work on Traycer 1.5.1.** Traycer holds a message for a busy agent until its turn ends. Timeline from the child's pi session log:
+- 23:18:23 the gate flagged a call and escalated.
+- About 23:19 the parent replied deny with the request id.
+- 23:23:24 the escalation timed out (300 s) and fell back to `(declined)`.
+- 23:23:28, after the turn ended, the deny arrived as a new prompt.
+
+`traycer agent send` has no mid-turn delivery option, and `traycer agent inbox` lists only messages already delivered, so neither channel can see the reply while the gated call waits. The prompt Traycer delivered also used a second header form, `[traycer:agent-message] from <title> (agent <id>) [harness]`, alongside the `Agent message from …` form seen on the first prompt.
+
+**Decision (owner): block, then retry.** Over a transport with `send` (Traycer), `deferredDecision` in `src/index.ts` sends the request and blocks the flagged call with "asked <parent> for a decision, request <id>; end your turn". The reply arrives as the next prompt; the `input` handler records the decision and transforms the prompt into a `[pi-jev]` note for the model. A retry of the same call (same judgment key) uses the decision once. No reply within `timeoutSeconds` (`humanTimeoutSeconds` after an escalate) means the next retry gets the enforce rule, so the fail-open rule in AGENTS.md still holds; the block while waiting is a wait, not a deny. `jev_escalate` over Traycer returns at once the same way. The in-turn `request` path in the Traycer escalator stays for a host that delivers mid-turn, unused by the extension today. Recorded in AGENTS.md and the README.
+
+**Test note:** `bun test` inside a Traycer agent's shell fails the three `test/e2e/rpc.test.ts` cases, because the inherited `TRAYCER_*` variables route escalation to Traycer instead of the RPC parent. Run the suite with those two variables unset.
+
+**Probe 4 (agent 47eebaf3):** the block worked live. The gate returned `asked e6ce83ff… for a decision, request 56d35850…`, and the agent ended its turn and waited. The deny reached the model raw, though, because:
+- Traycer runs each turn in a new pi process (no pi process stays up after the turn), so the in-memory wait was gone.
+- Traycer puts `# Workspace Directories …` above the sender header, so a first-line header check never sees the header.
+
+The model still followed the gate's text and did not retry, and `src/math.ts` stayed. Fixes:
+- `jev-deferred` session entries hold the pending wait: request id, recipient, deadline, and a SHA-256 slot of the judgment key, never the call's text. `restoreDeferred` re-registers them at `session_start`, but only when the recipient is still the current parent.
+- Decisions are never stored, so a hand-edited session cannot forge an approval.
+- The header is the first line, or the first line after Traycer's `# Workspace Directories` preamble. A header-shaped line anywhere else is rejected.
+- A deferred request id is `sha256(slot:nonce)`, and restore re-checks it. A hand-edited entry can't attach an id the parent approved for one call to another call's slot. (Both points came from automated security review.)
+
+Tests: 156 pass. Typecheck and lint are clean.
+
+**Probe 8 (agent 1baa8238), verified end to end live:**
+- The gate blocked the call with `asked e6ce83ff… for a decision, request eaf18fab…`, and the agent ended its turn.
+- The parent's deny arrived 4.6 s later as a fresh prompt. It was matched and journaled (`deny, by e6ce83ff…`), and the wait was settled.
+- The model read only `[pi-jev] e6ce83ff… denied the flagged `bash` call: …. Do not retry it`, never the raw JSON, and did not retry.
+
+Not covered live:
+- The gate blocking a retry after a deny: the model complied, so this is covered by unit tests only.
+- The late-queue re-send: this reply did not race, so unit tests only.
+- An approve: the parent's Claude Code auto-mode classifier blocks sending approvals unless the owner adds a permission rule for `traycer_send_message`.
+
+**Probe 7 (agent 276043de, bounded command `rm -rf /tmp/pi-jev-probe-scratch && git push --force origin main`):**
+- Block, bound id and session wait all worked live.
+- The deny was matched and journaled (`decision: deny, by e6ce83ff…`), 5 ms after the run's final message.
+- pi queued the transformed prompt after its before-settle check, so it never became a turn, and the process exited. pi's `prompt()` queues a message as steer/follow-up while `isStreaming`, and `_runBeforeSettleBoundary` checks the queue only once.
+
+Fix: a note queued during a run is re-sent with `pi.sendUserMessage` on `agent_settled`, unless it already started a user message.
+
+**Probe 5 (agent de7e332f):** no gate test. Its model refused the command, inspected the repo, and noticed it has no remote. Model behavior, not the extension.
+
+Pick up here: review and merge PR #2, then PR #3 (stacked). Optional: a live approve probe once a permission rule for `traycer_send_message` is in place. Probe agents b7693128, 1f6007d2, 5cd676ff, 47eebaf3, de7e332f, 578cfb8f, 276043de and 1baa8238 can be archived.
+
+---
+
 ## 2026-10-19: local session 1, built-in Jev definitions for a catalog gap
 
 PR #1 is merged (12db2a5). Local testing started in a separate sandbox project, `../pi-jev2-sandbox`. The package is installed there with `pi install -l`, so the user's global pi packages are unchanged.
