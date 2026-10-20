@@ -3,7 +3,7 @@
 ## State, verified 2026-10-20
 
 `@khaentertainment/pi-jev2` publishes from `KHAEntertainment/pi-jev2` through
-trusted publishing (OIDC), with no token anywhere.
+trusted publishing (OIDC), with no npm token in the repository or the workflow.
 
 | Step | State |
 |---|---|
