@@ -63,11 +63,14 @@ def main() -> int:
     print(f"minted a GitHub OIDC token ({len(token)} bytes) for audience {AUDIENCE}")
     status, payload = exchange(token)
     print(f"exchange HTTP {status}")
-    if status == 200 and isinstance(payload, dict):
+    # npm answers 201 Created on success; accept any 2xx.
+    if 200 <= status < 300 and isinstance(payload, dict):
         # Do not print the credential itself.
         print("exchange OK; response fields: " + ", ".join(sorted(payload)))
         print("trusted publisher is configured and usable from this workflow")
         return 0
+    if isinstance(payload, dict) and "token" in payload:
+        payload = {**payload, "token": "<redacted>"}
     print("registry said: " + json.dumps(payload, indent=2))
     print(
         "::error::npm rejected the OIDC exchange, so `npm publish` will fall back "

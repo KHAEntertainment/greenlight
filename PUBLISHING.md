@@ -73,6 +73,9 @@ dead end. (The token still in `~/.npmrc` answers `401 Unauthorized`.)
   attestation — visible in the registry as two signature entries and no
   `dist.attestations`. The 0.2.0 release run failed with `E404`; the workflow was
   rewritten the next day but has only ever been exercised as a dry run.
+- The first real release run (v0.4.1) failed in the preflight, not in npm: the
+  exchange returned `201 Created` with a token and the script accepted only
+  `200`. It now accepts any 2xx and redacts the token on every path.
 
 ### The one-time setup, and who can do it
 
