@@ -363,6 +363,35 @@ describe("escalate mode", () => {
 			expect(pi.userMessages).toHaveLength(1);
 		});
 
+		test("an expired jev_escalate wait does not block an id-less deny for a live request", async () => {
+			const { pi, ctx, sent, exec } = await traycerSetup();
+			const tool = pi.tools.get("jev_escalate");
+			await tool.execute("t", { question: "May I?", action: "x" }, undefined, undefined, ctx);
+			const realNow = Date.now;
+			Date.now = () => realNow() + 301_000;
+			try {
+				// In the same process: the next send settles the stale ask first.
+				await pi.emit("tool_call", destructiveCall, ctx);
+				const idless = `${header}{"decision":"deny","reason":"no"}`;
+				expect(((await pi.emit("input", { type: "input", text: idless, source: "rpc" }, ctx)) as { action: string }).action).toBe("transform");
+				expect(pi.entries.some((e) => e.customType === "jev-deferred" && (e.data as { state: string; requestId: string }).state === "settled" && (e.data as { requestId: string }).requestId === sent[0])).toBe(true);
+
+				// On restore: an expired ask from an earlier process is settled, not restored.
+				const session = pi.entries
+					.filter((e) => !(e.customType === "jev-deferred" && (e.data as { state: string }).state === "settled"))
+					.map((entry) => ({ type: "custom", ...entry }));
+				const next = fakePi(exec);
+				jevExtension(next.api);
+				const ctx2 = fakeContext(fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) })), { mode: "tui" });
+				ctx2.cwd = ctx.cwd;
+				ctx2.sessionManager.getEntries = () => session;
+				await next.emit("session_start", { reason: "resume" }, ctx2);
+				expect(next.entries.some((e) => e.customType === "jev-deferred" && (e.data as { requestId: string }).requestId === sent[0])).toBe(true);
+			} finally {
+				Date.now = realNow;
+			}
+		});
+
 		test("jev_escalate returns at once and the reply becomes a note", async () => {
 			const { pi, ctx, sent } = await traycerSetup();
 			const tool = pi.tools.get("jev_escalate");

@@ -644,6 +644,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		transport: string,
 		ctx: ExtensionContext,
 	): Promise<Deferred | typeof UNSAFE | undefined> {
+		settleExpiredAsks();
 		const slot = slotOf(key);
 		const nonce = randomUUID();
 		const scrubbed = scrubSecrets({ ...request, id: boundRequestId(slot, nonce) }, redact);
@@ -762,7 +763,28 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 		for (const data of [...waiting.values()].slice(-DEFERRED_RESTORE_LIMIT)) {
 			if (data.to !== parent || deferred.has(data.slot)) continue;
+			// No retry ever settles a jev_escalate wait, so an expired one would linger.
+			if (data.toolName === ESCALATE_TOOL && Date.now() >= data.deadline) {
+				writeDeferred({ state: "settled", requestId: data.requestId });
+				continue;
+			}
 			trackDeferred({ ...data, transport: escalator.name, cancel: () => undefined });
+		}
+	}
+
+	/**
+	 * Drop jev_escalate waits past their deadline. A gate wait is settled by
+	 * the retry that finds it expired; nothing retries a jev_escalate, and a
+	 * stale wait would count as pending, so an id-less reply to a live
+	 * request would see two candidates and be refused.
+	 */
+	function settleExpiredAsks(): void {
+		const now = Date.now();
+		for (const entry of [...deferred.values()]) {
+			if (entry.toolName !== ESCALATE_TOOL || entry.outcome || now < entry.deadline) continue;
+			entry.cancel();
+			deferred.delete(entry.slot);
+			writeDeferred({ state: "settled", requestId: entry.requestId });
 		}
 	}
 
