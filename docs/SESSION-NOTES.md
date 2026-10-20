@@ -6,6 +6,27 @@ where to pick up. Append a new entry when you stop.
 
 ---
 
+## 2026-10-19: local session 1, built-in Jev definitions for a catalog gap
+
+PR #1 is merged (12db2a5). Local testing started in a separate sandbox project, `../pi-jev2-sandbox`. The package is installed there with `pi install -l`, so the user's global pi packages are unchanged.
+
+**Provider choice: OpenRouter without logging pi in.** `/login openrouter` would expose about 400 chat models in `/model` and to RPC hosts such as Traycer. `enabledModels` does not hide them; it only limits startup selection and cycling. The key therefore lives in a file read only by this extension (`apiKeyFile` in the global `pi-jev.json`). It reached that file from Enigma (`PI_JEV_OPENROUTER_KEY`) through `enigma run`, and was never printed. Verified: `pi auth check --provider openrouter` is `not_ready`, and `pi --list-models openrouter` lists nothing. The name is not `OPENROUTER_API_KEY`, so that pi never sees OpenRouter as configured.
+
+**Catalog gap.** pi 1.3.0's cached OpenRouter catalog (`~/.pi/agent/models-store.json`) is 394 chat models with no classifiers, and it replaces the bundled list that has `typesafe/jev-1.13`, `jev-1.14` and `~typesafe/jev-latest`. So `openrouter/typesafe/jev-*` did not resolve with any credentials. Adding the model through `models.json` does not work either, because the loader drops `"type": "classifier"` and the entry becomes a chat model (tried, then reverted). Fix: `BUILT_IN_CLASSIFIERS` in `src/classifier.ts`, used by `resolveModel` only when the catalog has no entry. The extension notes it once at startup. This is probably a pi or pi.dev catalog bug worth reporting upstream.
+
+Verified live, before the extension change, with the same definition and the user's key: `git status --short` passed (clear, 881 ms), and `rm -rf src && git push --force origin main` was flagged (destructive 0.98, beyond_scope 0.98, impact 2.99/3, 229 ms).
+
+Verified end to end after the change, with the branch installed in the sandbox and pi driven over RPC (`pi --mode rpc --approve`):
+- Startup notes the built-in definition. Status: shadow, auth `apiKeyFile`.
+- `/jev check git status --short` is clear (destructive 0.02, impact 0.00/3).
+- `/jev check rm -rf src && git push --force origin main` is flagged (destructive 0.98, impact 3.00/3).
+
+Pick up here: try `enforce` in the sandbox, then decide whether to report the catalog gap upstream to pi.
+
+Tests: 141 pass (7 added). Typecheck and lint are clean.
+
+---
+
 ## 2026-10-18: local session 1, second review round on KHAEntertainment/pi-jev2#1
 
 Moved from Claude Code Cloud to the local machine (pi 1.3.0 at `/opt/homebrew/bin/pi`; `ModelRegistry.classify` and the RPC `input` dialog are present there, so the 1.2.0 assumptions hold). A local review found two gaps the first round missed, both fixed on the PR branch:

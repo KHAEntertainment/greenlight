@@ -10,6 +10,7 @@ import {
 	describeAnswer,
 	hasClassifierRuntime,
 	isCalibratedModel,
+	usesBuiltInDefinition,
 	JevError,
 	parseModelSpec,
 	redact,
@@ -333,6 +334,14 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			warnOnce(ctx, inactive, `pi-jev: ${inactive}; the judges are inactive until then.`);
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
+		}
+		const registry = registryOf(ctx);
+		if (registry && usesBuiltInDefinition(registry, config.model)) {
+			warnOnce(
+				ctx,
+				`built-in:${config.model}`,
+				`pi-jev: ${config.model} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
+			);
 		}
 		if (mode !== "shadow" && !isCalibratedModel(config.model)) {
 			warnOnce(

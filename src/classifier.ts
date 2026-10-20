@@ -119,12 +119,54 @@ export function hasClassifierRuntime(
 	);
 }
 
+/** The fields every OpenRouter Jev entry in pi's bundled catalog shares. */
+function openRouterJev(id: string, name: string): ClassifierModel<ClassifierApi> {
+	return {
+		type: "classifier",
+		id,
+		name,
+		api: "typesafe-system-one",
+		provider: "openrouter",
+		baseUrl: "https://openrouter.ai/api/v1",
+		input: ["text", "image"],
+		cost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow: 262144,
+	};
+}
+
+/**
+ * Jev classifiers the endpoint serves but the host catalog can lose. pi 1.3.0
+ * refreshes OpenRouter's model list from pi.dev, and that list is chat-only,
+ * so it replaces the bundled entries below and `openrouter/typesafe/jev-*`
+ * stops resolving. These are copied from pi's bundled OpenRouter data. The
+ * host catalog always wins; a definition here is used only when it has none.
+ */
+export const BUILT_IN_CLASSIFIERS: readonly ClassifierModel<ClassifierApi>[] = [
+	openRouterJev("typesafe/jev-1.13", "TypeSafe: Jev 1.13"),
+	openRouterJev("typesafe/jev-1.14", "TypeSafe: Jev 1.14"),
+	openRouterJev("~typesafe/jev-latest", "TypeSafe: Jev Latest"),
+];
+
+function builtInClassifier(
+	provider: string,
+	id: string,
+): ClassifierModel<ClassifierApi> | undefined {
+	return BUILT_IN_CLASSIFIERS.find((model) => model.provider === provider && model.id === id);
+}
+
+/** The host catalog's entry, else a built-in Jev definition, else undefined. */
 export function resolveModel(
 	registry: ClassifierRegistry,
 	spec: string,
 ): ClassifierModel<ClassifierApi> | undefined {
 	const { provider, id } = parseModelSpec(spec);
-	return registry.findOfType("classifier", provider, id);
+	return registry.findOfType("classifier", provider, id) ?? builtInClassifier(provider, id);
+}
+
+/** True when `spec` resolves only through `BUILT_IN_CLASSIFIERS`. */
+export function usesBuiltInDefinition(registry: ClassifierRegistry, spec: string): boolean {
+	const { provider, id } = parseModelSpec(spec);
+	return !registry.findOfType("classifier", provider, id) && builtInClassifier(provider, id) !== undefined;
 }
 
 /**
@@ -148,7 +190,7 @@ export async function classify(
 ): Promise<JevResponse> {
 	validateQuestions(call.questions);
 	const spec = parseModelSpec(call.model);
-	const model = registry.findOfType("classifier", spec.provider, spec.id);
+	const model = resolveModel(registry, call.model);
 	if (!model) {
 		throw new JevError(
 			`classifier ${formatModelSpec(spec)} is not in the model catalog`,

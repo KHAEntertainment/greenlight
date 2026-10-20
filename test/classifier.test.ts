@@ -7,6 +7,8 @@ import {
 	parseModelSpec,
 	redact,
 	rememberSecret,
+	resolveModel,
+	usesBuiltInDefinition,
 } from "../src/classifier";
 import { GATE_QUESTIONS } from "../src/gate";
 import { fakeRegistry, gateAnswers } from "./helpers";
@@ -56,6 +58,40 @@ describe("classify", () => {
 	test("an error result throws so callers fail open", async () => {
 		const registry = fakeRegistry(() => ({ stopReason: "error", errorMessage: "HTTP 401" }));
 		await expect(classify(registry, { model: "typesafe/jev-latest", state: {}, questions: GATE_QUESTIONS })).rejects.toThrow("HTTP 401");
+	});
+
+	test("an OpenRouter Jev model missing from the catalog uses the built-in definition", async () => {
+		const registry = fakeRegistry(() => ({ answers: gateAnswers() }), { known: [] });
+		const response = await classify(registry, {
+			model: "openrouter/typesafe/jev-1.14",
+			state: { x: 1 },
+			questions: GATE_QUESTIONS,
+			apiKey: "sk-test",
+		});
+		expect(response.model).toBe("openrouter/typesafe/jev-1.14");
+		expect(registry.calls[0]).toEqual({ model: "openrouter/typesafe/jev-1.14", state: { x: 1 }, apiKey: "sk-test" });
+		expect(resolveModel(registry, "openrouter/typesafe/jev-1.14")?.baseUrl).toBe("https://openrouter.ai/api/v1");
+		expect(usesBuiltInDefinition(registry, "openrouter/typesafe/jev-1.14")).toBe(true);
+	});
+
+	test("the host catalog wins over a built-in definition", () => {
+		const registry = fakeRegistry(() => ({}), { known: ["openrouter/typesafe/jev-1.13"] });
+		expect(resolveModel(registry, "openrouter/typesafe/jev-1.13")?.baseUrl).toBe("https://example.invalid");
+		expect(usesBuiltInDefinition(registry, "openrouter/typesafe/jev-1.13")).toBe(false);
+	});
+
+	test.each(["openrouter/typesafe/jev-1.13", "openrouter/typesafe/jev-1.14", "openrouter/~typesafe/jev-latest"])(
+		"%s has a built-in definition",
+		(spec) => {
+			expect(resolveModel(fakeRegistry(() => ({}), { known: [] }), spec)?.type).toBe("classifier");
+		},
+	);
+
+	test("only known Jev models have built-in definitions", () => {
+		const registry = fakeRegistry(() => ({}), { known: [] });
+		for (const spec of ["openrouter/typesafe/jev-9.99", "openrouter/openai/gpt-6", "vercel-ai-gateway/typesafe-ai/jev-1.14.0", "typesafe/jev-latest"]) {
+			expect(resolveModel(registry, spec)).toBeUndefined();
+		}
 	});
 
 	test("an unknown model throws", async () => {
