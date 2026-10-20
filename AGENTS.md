@@ -17,8 +17,8 @@ Maintainer rules for this repository.
 - A project `.pi/pi-jev.json` is untrusted: it may tighten the gate, never loosen it, and may not set credentials or escalation destinations (`restrictProject` in `src/config.ts`). A new config key needs a decision on which side it falls.
 - Escalation requests are scrubbed of credentials (`scrubSecrets` in `src/escalation.ts`) before any transport sees them. Keep it that way for new request fields. Redact only values proven inert; when a credential is mixed with code, keep the decision local rather than masking around it.
 - The one exception to failing open: a flagged call whose escalation request is unsafe to send (`UNSAFE` in `src/index.ts`) blocks when headless. That is not an outage. The agent writes the call, and failing open would let it opt out of the orchestrator.
-- Shadow mode is the default. Any change that makes enforcement or escalation implicit needs justifying in the README.
-- A threshold change belongs with a measurement in the `## Calibration` table, not with a guess. That applies per classifier: thresholds measured on Jev do not transfer to another model without its own rows (`npm run calibrate`).
+- Shadow mode is the default. Any change that makes enforcement or escalation implicit needs justifying in `docs/REFERENCE.md` (and, where users notice it, the README).
+- A threshold change belongs with a measurement in the `## Calibration` table in `docs/REFERENCE.md`, not with a guess. That applies per classifier: thresholds measured on Jev do not transfer to another model without its own rows (`npm run calibrate`).
 - Before pushing: `npm run typecheck`, `npm run lint`, `npm test`.
 
 ## Publishing

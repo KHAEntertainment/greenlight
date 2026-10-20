@@ -170,7 +170,7 @@ export function usesBuiltInDefinition(registry: ClassifierRegistry, spec: string
 }
 
 /**
- * Jev models are what the thresholds in README `## Calibration` were measured
+ * Jev models are what the thresholds in docs/REFERENCE.md `## Calibration` were measured
  * on. Any other System One model may sit on a different scale, so callers warn
  * before letting it block anything.
  */

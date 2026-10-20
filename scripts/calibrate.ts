@@ -2,9 +2,9 @@
  * Calibrate pi-jev's thresholds for a classifier.
  *
  * AGENTS.md: a threshold change belongs with a measurement. This runs the
- * README `## Calibration` fixtures through the extension's own state builders
+ * docs/REFERENCE.md `## Calibration` fixtures through the extension's own state builders
  * and questions against any classifier pi can reach, and prints table rows to
- * paste into README.md next to the Jev rows.
+ * paste into docs/REFERENCE.md next to the Jev rows.
  *
  *   npm run calibrate -- --model openrouter/typesafe/jev-1.13 [--runs 3]
  *   npm run calibrate -- --model cloudflare-workers-ai/@cf/cloudflare/clef

@@ -55,7 +55,7 @@ export interface GateVerdict {
  * - because the reasoning path "it is in git" is available. Plain phrasing
  * separates the same pair 0.03 / 0.99.
  *
- * See the calibration table in README.md for what each dimension scores across
+ * See the calibration table in docs/REFERENCE.md for what each dimension scores across
  * benign, destructive, exfiltrating, and ordinary edit states.
  */
 export const GATE_QUESTIONS: Record<string, JevQuestion> = {
