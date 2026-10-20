@@ -17,17 +17,13 @@ Maintainer rules for this repository.
 - A project `.pi/pi-jev.json` is untrusted: it may tighten the gate, never loosen it, and may not set credentials or escalation destinations (`restrictProject` in `src/config.ts`). A new config key needs a decision on which side it falls.
 - Escalation requests are scrubbed of credentials (`scrubSecrets` in `src/escalation.ts`) before any transport sees them. Keep it that way for new request fields. Redact only values proven inert; when a credential is mixed with code, keep the decision local rather than masking around it.
 - The one exception to failing open: a flagged call whose escalation request is unsafe to send (`UNSAFE` in `src/index.ts`) blocks when headless. That is not an outage. The agent writes the call, and failing open would let it opt out of the orchestrator.
-- Shadow mode is the default. Any change that makes enforcement or escalation implicit needs justifying in the README.
-- A threshold change belongs with a measurement in the `## Calibration` table, not with a guess. That applies per classifier: thresholds measured on Jev do not transfer to another model without its own rows (`npm run calibrate`).
+- Shadow mode is the default. Any change that makes enforcement or escalation implicit needs justifying in `docs/REFERENCE.md` (and, where users notice it, the README).
+- A threshold change belongs with a measurement in the `## Calibration` table in `docs/REFERENCE.md`, not with a guess. That applies per classifier: thresholds measured on Jev do not transfer to another model without its own rows (`npm run calibrate`).
 - Before pushing: `npm run typecheck`, `npm run lint`, `npm test`.
 
 ## Publishing
 
 - A GitHub release publishes from `.github/workflows/publish.yml` using trusted publishing (OIDC), so the repo holds no npm token and no OTP is involved.
-- One-time setup (TODO, owner only):
-  1. Create the `@khaentertainment` scope on npm.
-  2. Bootstrap the package with one authenticated publish. npm cannot attach a trusted publisher to a package that does not exist yet.
-  3. On npmjs.com, open the package settings and add a Trusted Publisher: user `KHAEntertainment`, repository `pi-jev2`, workflow `publish.yml`, environment empty.
-
-  See `PUBLISHING.md`.
+- The one-time setup is done (2026-10-20): the scope exists, `0.4.0` was bootstrapped by hand, the trusted publisher is saved with npm publish allowed and dist-tag not allowed, and publishing access requires 2FA and disallows tokens. State and the release steps are in `PUBLISHING.md`.
+- Never publish by hand again or add an npm token to the repo or workflow. A release goes through a version bump, a merge, and a GitHub release.
 - The package name is scoped (`@khaentertainment/pi-jev2`) so it can sit next to the upstream `@y0usaf/pi-jev` without a name clash.

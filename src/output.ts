@@ -7,7 +7,7 @@
  * a transient failure from a permanent one. Both are judgements about text
  * that exists only after the call.
  *
- * Question phrasing and thresholds come from the probe in README.md: the leak
+ * Question phrasing and thresholds come from the probe in docs/REFERENCE.md: the leak
  * question separated 0.92-0.99 from 0.01-0.02 with no overlap, and the failure
  * class answered at confidence 0.88-1.00 when it was right and 0.42 when it was
  * unsure, which is why a confidence floor silences the advice.
