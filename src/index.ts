@@ -384,9 +384,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		return undefined;
 	}
 
-	/** Nothing can classify: hide the status rather than show a mode that does nothing. */
-	function unusable(): boolean {
-		return Boolean(inactive && outputInactive);
+	/** Readiness of both judges' models. Credentials can change mid-session (`/login`). */
+	function refreshReady(ctx: ExtensionContext): void {
+		inactive = checkReady(ctx);
+		outputInactive = outputModel() === config.model ? inactive : checkReady(ctx, outputModel());
 	}
 
 	/** The output judge's classifier: `output.model`, else the gate's `model`. */
@@ -403,8 +404,16 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		return parseModelSpec(spec).provider === parseModelSpec(config.model).provider ? config.apiKey : undefined;
 	}
 
-	function statusText(): string {
-		return `jev: ${gateOn ? mode : "off"}${outputOn ? "" : " (out off)"}`;
+	/**
+	 * The footer status, naming what actually runs: a judge that is on but
+	 * cannot reach its model counts as off. Undefined (no status) when neither
+	 * judge can classify, rather than a mode that does nothing.
+	 */
+	function statusText(): string | undefined {
+		const gate = gateOn && !inactive;
+		const output = outputOn && !outputInactive;
+		if (!gate && !output) return undefined;
+		return `jev: ${gate ? mode : "off"}${output ? "" : " (out off)"}`;
 	}
 
 	/** One classifier request with this session's timeout and key, on `model` (the gate's by default). */
@@ -487,11 +496,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		for (const warning of loaded.warnings) {
 			ctx.ui.notify(`pi-jev: ${redact(warning)}`, "warning");
 		}
-		inactive = checkReady(ctx);
-		outputInactive = outputModel() === config.model ? inactive : checkReady(ctx, outputModel());
+		refreshReady(ctx);
 		syncEscalateTool(ctx);
 		announce(ctx);
-		ctx.ui.setStatus(STATUS_KEY, unusable() ? undefined : statusText());
+		ctx.ui.setStatus(STATUS_KEY, statusText());
 	});
 
 	// A decision on a pending escalation is the gate's: the gate records it,
@@ -1122,7 +1130,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				const on = sub === "on";
 				gateOn = on;
 				outputOn = on;
-				ctx.ui.setStatus(STATUS_KEY, unusable() ? undefined : on ? `jev: ${mode}` : "jev: off");
+				if (on) refreshReady(ctx);
+				ctx.ui.setStatus(STATUS_KEY, statusText());
 				ctx.ui.notify(`pi-jev: gate ${sub}`, "info");
 				if (on) announce(ctx);
 				return;

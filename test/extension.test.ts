@@ -521,6 +521,33 @@ describe("output judge and tools", () => {
 		expect(registry.calls.map((call) => call.model)).toEqual(["openrouter/typesafe/jev-1.13"]);
 	});
 
+	test("/jev on picks up credentials added mid-session", async () => {
+		configure({ model: "openrouter/typesafe/jev-1.13" });
+		const pi = fakePi();
+		const auth = { configured: false };
+		const registry = fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) }), auth);
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		expect(registry.calls).toHaveLength(0);
+		auth.configured = true; // as after /login openrouter
+		await pi.commands.get("jev").handler("on", ctx);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		expect(registry.calls).toHaveLength(1);
+	});
+
+	test("the status names only judges that can run", async () => {
+		configure({ model: "openrouter/nobody/nothing", gate: { mode: "enforce" }, output: { enabled: false, model: "typesafe/jev-latest" } });
+		const off = fakePi();
+		const { ctx: offCtx } = await start(off);
+		// The gate cannot reach its model and the output judge is off: nothing runs.
+		expect(offCtx.statuses.at(-1)).toBeUndefined();
+
+		configure({ model: "openrouter/nobody/nothing", gate: { mode: "enforce" }, output: { model: "typesafe/jev-latest" } });
+		const on = fakePi();
+		const { ctx: onCtx } = await start(on);
+		expect(onCtx.statuses.at(-1)).toBe("jev: off");
+	});
+
 	test("jev_ask wraps text state and accepts bool/noul", async () => {
 		const pi = fakePi();
 		const registry = fakeRegistry(() => ({ answers: { relevant: { type: "bool", probability: 0.8 } } }));
