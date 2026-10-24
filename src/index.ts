@@ -297,15 +297,57 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	function warnOnce(ctx: ExtensionContext, key: string, message: string): void {
+	function warnOnce(
+		ctx: ExtensionContext,
+		key: string,
+		message: string,
+		type: "info" | "warning" = "warning",
+	): void {
 		if (warnedOnce.has(key)) return;
 		warnedOnce.add(key);
-		ctx.ui.notify(message, "warning");
+		ctx.ui.notify(message, type);
 	}
 
 	function registryOf(ctx: ExtensionContext): ClassifierRegistry | undefined {
 		const registry: unknown = ctx.modelRegistry;
 		return hasClassifierRuntime(registry) ? registry : undefined;
+	}
+
+	/**
+	 * Notices about the classifier: why the judges cannot run, or what they run
+	 * on. Silent while both judges are off (a global install switched on per
+	 * project), and repeated by `/jev on`, so a notice skipped at startup still
+	 * shows once something can classify. `warnOnce` keeps it to one each.
+	 */
+	function announce(ctx: ExtensionContext): void {
+		if (!gateOn && !outputOn) return;
+		if (inactive) {
+			warnOnce(ctx, inactive, `pi-jev: ${inactive}; the judges are inactive until then.`);
+			return;
+		}
+		const registry = registryOf(ctx);
+		if (registry && usesBuiltInDefinition(registry, config.model)) {
+			warnOnce(
+				ctx,
+				`built-in:${config.model}`,
+				`pi-jev: ${config.model} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
+				"info",
+			);
+		}
+		if (gateOn && mode !== "shadow" && !isCalibratedModel(config.model)) {
+			warnOnce(
+				ctx,
+				`uncalibrated:${config.model}`,
+				`pi-jev: ${config.model} is not a Jev model; the thresholds were measured on Jev, so it may flag too much or too little. Run \`npm run calibrate -- --model ${config.model}\` before relying on ${mode}.`,
+			);
+		}
+		if (gateOn && mode === "escalate" && !escalatorFor(ctx)) {
+			warnOnce(
+				ctx,
+				"no-transport",
+				"pi-jev: escalate mode has no orchestrator here (no Traycer env, no escalation.a2a.url, not in RPC mode); flagged calls use the enforce rule.",
+			);
+		}
 	}
 
 	/** Why the judges cannot run with this host and config, or undefined. */
@@ -411,34 +453,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 		inactive = checkReady(ctx);
 		syncEscalateTool(ctx);
-		if (inactive) {
-			warnOnce(ctx, inactive, `pi-jev: ${inactive}; the judges are inactive until then.`);
-			ctx.ui.setStatus(STATUS_KEY, undefined);
-			return;
-		}
-		const registry = registryOf(ctx);
-		if (registry && usesBuiltInDefinition(registry, config.model)) {
-			warnOnce(
-				ctx,
-				`built-in:${config.model}`,
-				`pi-jev: ${config.model} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
-			);
-		}
-		if (mode !== "shadow" && !isCalibratedModel(config.model)) {
-			warnOnce(
-				ctx,
-				`uncalibrated:${config.model}`,
-				`pi-jev: ${config.model} is not a Jev model; the thresholds were measured on Jev, so it may flag too much or too little. Run \`npm run calibrate -- --model ${config.model}\` before relying on ${mode}.`,
-			);
-		}
-		if (mode === "escalate" && !escalatorFor(ctx)) {
-			warnOnce(
-				ctx,
-				"no-transport",
-				"pi-jev: escalate mode has no orchestrator here (no Traycer env, no escalation.a2a.url, not in RPC mode); flagged calls use the enforce rule.",
-			);
-		}
-		ctx.ui.setStatus(STATUS_KEY, statusText());
+		announce(ctx);
+		ctx.ui.setStatus(STATUS_KEY, inactive ? undefined : statusText());
 	});
 
 	// A decision on a pending escalation is the gate's: the gate records it,
@@ -1068,8 +1084,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				const on = sub === "on";
 				gateOn = on;
 				outputOn = on;
-				ctx.ui.setStatus(STATUS_KEY, on ? `jev: ${mode}` : "jev: off");
+				ctx.ui.setStatus(STATUS_KEY, inactive ? undefined : on ? `jev: ${mode}` : "jev: off");
 				ctx.ui.notify(`pi-jev: gate ${sub}`, "info");
+				if (on) announce(ctx);
 				return;
 			}
 			if (sub === "mode") {

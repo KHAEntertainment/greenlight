@@ -74,10 +74,43 @@ describe("session_start", () => {
 		const pi = fakePi();
 		const registry = fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) }), { known: [], configured: false });
 		const { ctx } = await start(pi, {}, registry);
-		expect(ctx.notifications.some((n) => n.message.includes("built-in definition"))).toBe(true);
+		expect(ctx.notifications.find((n) => n.message.includes("built-in definition"))?.type).toBe("info");
 		expect(ctx.notifications.some((n) => n.message.includes("inactive"))).toBe(false);
 		await pi.emit("tool_call", destructiveCall, ctx);
 		expect(registry.calls[0]).toMatchObject({ model: "openrouter/typesafe/jev-1.14", apiKey: "sk-or-test" });
+	});
+
+	test("with both judges off, startup says nothing about the classifier", async () => {
+		configure({
+			model: "openrouter/typesafe/jev-1.14",
+			gate: { enabled: false, mode: "escalate" },
+			output: { enabled: false },
+		});
+		const pi = fakePi();
+		const registry = fakeRegistry(() => ({}), { known: [], configured: false });
+		const { ctx } = await start(pi, {}, registry);
+		expect(ctx.notifications).toEqual([]);
+	});
+
+	test("/jev on reports what startup kept quiet while the judges were off", async () => {
+		configure({ model: "openrouter/typesafe/jev-1.13", gate: { enabled: false }, output: { enabled: false } });
+		const pi = fakePi();
+		const { ctx } = await start(pi, {}, fakeRegistry(() => ({}), { configured: false }));
+		expect(ctx.notifications).toEqual([]);
+		await pi.commands.get("jev").handler("on", ctx);
+		expect(ctx.notifications.some((n) => n.message.includes("/login openrouter") && n.type === "warning")).toBe(true);
+		expect(ctx.statuses.at(-1)).toBeUndefined();
+	});
+
+	test("a project file that turns the judges on brings the notices back", async () => {
+		const keyFile = join(root, "or.key");
+		writeFileSync(keyFile, "sk-or-test\n");
+		configure({ model: "openrouter/typesafe/jev-1.14", apiKeyFile: keyFile, gate: { enabled: false }, output: { enabled: false } });
+		writeFileSync(join(root, "project", ".pi", "pi-jev.json"), JSON.stringify({ gate: { enabled: true } }));
+		const pi = fakePi();
+		const registry = fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) }), { known: [], configured: false });
+		const { ctx } = await start(pi, {}, registry);
+		expect(ctx.notifications.some((n) => n.message.includes("built-in definition"))).toBe(true);
 	});
 
 	test("an unknown model is reported", async () => {

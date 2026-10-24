@@ -11,6 +11,7 @@ Run inside a GitHub Actions job that has `id-token: write`.
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -21,6 +22,30 @@ AUDIENCE = "npm:registry.npmjs.org"
 # as the Authorization bearer to the per-package exchange endpoint.
 EXCHANGE = "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/{}"
 PACKAGE = "@khaentertainment/pi-jev2"
+# A JWT (the GitHub OIDC token) or an npm token, wherever it sits in a reply.
+TOKEN_SHAPES = re.compile(r"eyJ[\w-]+\.[\w-]+\.[\w-]+|npm_[A-Za-z0-9]{20,}")
+
+
+def redact(value, secret: str):
+    """Mask credentials in a registry reply before it is printed.
+
+    Values under a key naming a token are blanked at any depth, and
+    token-shaped strings are masked everywhere else: in keys, in values, and
+    in a raw non-JSON error body.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            key = redact(str(k), secret)
+            while key in out:  # two keys masked to the same text
+                key += "'"
+            out[key] = "<redacted>" if "token" in str(k).lower() else redact(v, secret)
+        return out
+    if isinstance(value, list):
+        return [redact(v, secret) for v in value]
+    if isinstance(value, str):
+        return TOKEN_SHAPES.sub("<redacted>", value.replace(secret, "<redacted>"))
+    return value
 
 
 def mint() -> str:
@@ -33,7 +58,10 @@ def mint() -> str:
         headers={"Authorization": f"bearer {bearer}"},
     )
     with urllib.request.urlopen(req, timeout=30) as resp:
-        return json.load(resp)["value"]
+        token = json.load(resp)["value"]
+    # The runner masks it in every later line of this job's log.
+    print(f"::add-mask::{token}")
+    return token
 
 
 def exchange(oidc_token: str):
@@ -66,12 +94,11 @@ def main() -> int:
     # npm answers 201 Created on success; accept any 2xx.
     if 200 <= status < 300 and isinstance(payload, dict):
         # Do not print the credential itself.
-        print("exchange OK; response fields: " + ", ".join(sorted(payload)))
+        fields = sorted(redact(str(k), token) for k in payload)
+        print("exchange OK; response fields: " + ", ".join(fields))
         print("trusted publisher is configured and usable from this workflow")
         return 0
-    if isinstance(payload, dict) and "token" in payload:
-        payload = {**payload, "token": "<redacted>"}
-    print("registry said: " + json.dumps(payload, indent=2))
+    print("registry said: " + json.dumps(redact(payload, token), indent=2))
     print(
         "::error::npm rejected the OIDC exchange, so `npm publish` will fall back "
         "to token auth and fail with ENEEDAUTH. A 'package not found' here means no "
