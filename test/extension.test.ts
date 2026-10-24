@@ -92,6 +92,16 @@ describe("session_start", () => {
 		expect(ctx.notifications).toEqual([]);
 	});
 
+	test("/jev on reports what startup kept quiet while the judges were off", async () => {
+		configure({ model: "openrouter/typesafe/jev-1.13", gate: { enabled: false }, output: { enabled: false } });
+		const pi = fakePi();
+		const { ctx } = await start(pi, {}, fakeRegistry(() => ({}), { configured: false }));
+		expect(ctx.notifications).toEqual([]);
+		await pi.commands.get("jev").handler("on", ctx);
+		expect(ctx.notifications.some((n) => n.message.includes("/login openrouter") && n.type === "warning")).toBe(true);
+		expect(ctx.statuses.at(-1)).toBeUndefined();
+	});
+
 	test("a project file that turns the judges on brings the notices back", async () => {
 		const keyFile = join(root, "or.key");
 		writeFileSync(keyFile, "sk-or-test\n");

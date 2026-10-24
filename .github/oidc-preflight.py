@@ -29,14 +29,18 @@ TOKEN_SHAPES = re.compile(r"eyJ[\w-]+\.[\w-]+\.[\w-]+|npm_[A-Za-z0-9]{20,}")
 def redact(value, secret: str):
     """Mask credentials in a registry reply before it is printed.
 
-    Keys naming a token are blanked at any depth, and token-shaped strings are
-    masked anywhere else, including a raw non-JSON error body.
+    Values under a key naming a token are blanked at any depth, and
+    token-shaped strings are masked everywhere else: in keys, in values, and
+    in a raw non-JSON error body.
     """
     if isinstance(value, dict):
-        return {
-            k: "<redacted>" if "token" in str(k).lower() else redact(v, secret)
-            for k, v in value.items()
-        }
+        out = {}
+        for k, v in value.items():
+            key = redact(str(k), secret)
+            while key in out:  # two keys masked to the same text
+                key += "'"
+            out[key] = "<redacted>" if "token" in str(k).lower() else redact(v, secret)
+        return out
     if isinstance(value, list):
         return [redact(v, secret) for v in value]
     if isinstance(value, str):
@@ -90,7 +94,8 @@ def main() -> int:
     # npm answers 201 Created on success; accept any 2xx.
     if 200 <= status < 300 and isinstance(payload, dict):
         # Do not print the credential itself.
-        print("exchange OK; response fields: " + ", ".join(sorted(payload)))
+        fields = sorted(redact(str(k), token) for k in payload)
+        print("exchange OK; response fields: " + ", ".join(fields))
         print("trusted publisher is configured and usable from this workflow")
         return 0
     print("registry said: " + json.dumps(redact(payload, token), indent=2))
