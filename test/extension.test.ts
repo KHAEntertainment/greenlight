@@ -502,6 +502,25 @@ describe("output judge and tools", () => {
 		expect(ctx.notifications.some((n) => n.message.includes("no credentials for typesafe"))).toBe(true);
 	});
 
+	test("a broken output.model stops only the output judge, even when a project turns it on", async () => {
+		const keyFile = join(root, "or.key");
+		writeFileSync(keyFile, "sk-or-test\n");
+		configure({
+			model: "openrouter/typesafe/jev-1.13",
+			apiKeyFile: keyFile,
+			gate: { mode: "enforce" },
+			output: { enabled: false, model: "typesafe/jev-latest" },
+		});
+		writeFileSync(join(root, "project", ".pi", "pi-jev.json"), JSON.stringify({ output: { enabled: true } }));
+		const pi = fakePi();
+		const registry = fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) }), { configured: false });
+		const { ctx } = await start(pi, { hasUI: false }, registry);
+		expect(ctx.notifications.some((n) => n.message.includes("the output judge is inactive"))).toBe(true);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		await pi.emit("tool_result", resultEvent, ctx);
+		expect(registry.calls.map((call) => call.model)).toEqual(["openrouter/typesafe/jev-1.13"]);
+	});
+
 	test("jev_ask wraps text state and accepts bool/noul", async () => {
 		const pi = fakePi();
 		const registry = fakeRegistry(() => ({ answers: { relevant: { type: "bool", probability: 0.8 } } }));

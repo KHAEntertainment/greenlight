@@ -20,7 +20,7 @@
 
 import { readFileSync } from "node:fs";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { classify, describeAnswer, redact, type ClassifierRegistry, type JevResponse } from "../src/classifier";
+import { classify, describeAnswer, redact, rememberSecret, type ClassifierRegistry, type JevResponse } from "../src/classifier";
 import { defaultJevConfig, expandHome } from "../src/config";
 import { buildGateState, evaluateGate, GATE_QUESTIONS } from "../src/gate";
 import { buildOutputState, evaluateOutput, OUTPUT_QUESTIONS } from "../src/output";
@@ -34,6 +34,8 @@ const model = flag("model") ?? "typesafe/jev-latest";
 const runs = Number(flag("runs") ?? 3);
 const apiKeyFile = flag("api-key-file");
 const apiKey = apiKeyFile ? readFileSync(expandHome(apiKeyFile), "utf8").trim() : undefined;
+// redact() masks only what it has been told about; a provider error may echo the key.
+rememberSecret(apiKey);
 const config = { ...defaultJevConfig(), model };
 
 const GATE_FIXTURES: { label: string; tool: string; input: unknown; userRequest: string; expect: "pass" | "flag" }[] = [
