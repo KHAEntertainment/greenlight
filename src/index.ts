@@ -326,13 +326,16 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			return;
 		}
 		const registry = registryOf(ctx);
-		if (registry && usesBuiltInDefinition(registry, config.model)) {
-			warnOnce(
-				ctx,
-				`built-in:${config.model}`,
-				`pi-jev: ${config.model} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
-				"info",
-			);
+		const inUse = new Set([...(gateOn ? [config.model] : []), ...(outputOn ? [outputModel()] : [])]);
+		for (const spec of inUse) {
+			if (registry && usesBuiltInDefinition(registry, spec)) {
+				warnOnce(
+					ctx,
+					`built-in:${spec}`,
+					`pi-jev: ${spec} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
+					"info",
+				);
+			}
 		}
 		if (gateOn && mode !== "shadow" && !isCalibratedModel(config.model)) {
 			warnOnce(
@@ -356,38 +359,56 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		if (!registry) {
 			return "this host has no classifier runtime (pi 0.99 or later is required)";
 		}
-		if (!resolveModel(registry, config.model)) {
-			return `classifier ${config.model} is not in the model catalog (check the provider/id spelling, or add it in models.json)`;
-		}
-		if (config.apiKey) return undefined;
-		const { provider } = parseModelSpec(config.model);
-		const status = registry.getProviderAuthStatus?.(provider);
-		if (status && !status.configured) {
-			return `no credentials for ${provider}: ${authHint(provider)}`;
+		const specs = outputOn && outputModel() !== config.model ? [config.model, outputModel()] : [config.model];
+		for (const spec of specs) {
+			if (!resolveModel(registry, spec)) {
+				return `classifier ${spec} is not in the model catalog (check the provider/id spelling, or add it in models.json)`;
+			}
+			if (keyFor(spec)) continue;
+			const { provider } = parseModelSpec(spec);
+			const status = registry.getProviderAuthStatus?.(provider);
+			if (status && !status.configured) {
+				return `no credentials for ${provider}: ${authHint(provider)}`;
+			}
 		}
 		return undefined;
+	}
+
+	/** The output judge's classifier: `output.model`, else the gate's `model`. */
+	function outputModel(): string {
+		return config.output.model ?? config.model;
+	}
+
+	/**
+	 * `apiKey` belongs to `model`'s provider. Another provider never gets it:
+	 * it would send that provider a credential issued by someone else.
+	 */
+	function keyFor(spec: string): string | undefined {
+		if (!config.apiKey) return undefined;
+		return parseModelSpec(spec).provider === parseModelSpec(config.model).provider ? config.apiKey : undefined;
 	}
 
 	function statusText(): string {
 		return `jev: ${gateOn ? mode : "off"}${outputOn ? "" : " (out off)"}`;
 	}
 
-	/** One classifier request with this session's model, timeout, and key override. */
+	/** One classifier request with this session's timeout and key, on `model` (the gate's by default). */
 	async function ask(
 		ctx: ExtensionContext,
 		state: JevState,
 		questions: Record<string, JevQuestion>,
 		signal: AbortSignal | undefined,
+		model: string = config.model,
 	): Promise<JevResponse> {
 		const registry = registryOf(ctx);
 		if (!registry) throw new JevError("no classifier runtime on this host");
 		return classify(registry, {
 			state,
 			questions,
-			model: config.model,
+			model,
 			timeoutMs: config.timeoutMs,
 			retries: config.retries,
-			apiKey: config.apiKey,
+			apiKey: keyFor(model),
 			signal,
 		});
 	}
@@ -995,6 +1016,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				}),
 				OUTPUT_QUESTIONS,
 				ctx.signal,
+				outputModel(),
 			);
 			return evaluateOutput(response, config);
 		} catch (error) {
@@ -1084,6 +1106,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				const on = sub === "on";
 				gateOn = on;
 				outputOn = on;
+				// Readiness depends on which judges are on (the output judge may use its own model).
+				if (on) inactive = checkReady(ctx);
 				ctx.ui.setStatus(STATUS_KEY, inactive ? undefined : on ? `jev: ${mode}` : "jev: off");
 				ctx.ui.notify(`pi-jev: gate ${sub}`, "info");
 				if (on) announce(ctx);
@@ -1184,7 +1208,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				env: process.env,
 			});
 			ctx.ui.notify(
-				`pi-jev: ${inactive ? `inactive (${inactive})` : gateOn ? "on" : "off"}, out ${outputOn ? "on" : "off"}, mode ${mode}, model ${config.model}${isCalibratedModel(config.model) ? "" : " (uncalibrated)"}, auth ${auth}, escalation ${transport}, judging ${config.gate.tools.join("/")}, out tools ${config.output.tools.join("/")}, cache ${cache.size}/${outputCache.size}, journal ${journal.length}`,
+				`pi-jev: ${inactive ? `inactive (${inactive})` : gateOn ? "on" : "off"}, out ${outputOn ? "on" : "off"}, mode ${mode}, model ${config.model}${isCalibratedModel(config.model) ? "" : " (uncalibrated)"}${outputModel() === config.model ? "" : `, out model ${outputModel()}`}, auth ${auth}, escalation ${transport}, judging ${config.gate.tools.join("/")}, out tools ${config.output.tools.join("/")}, cache ${cache.size}/${outputCache.size}, journal ${journal.length}`,
 				"info",
 			);
 		},

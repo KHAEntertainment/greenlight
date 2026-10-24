@@ -462,6 +462,46 @@ describe("output judge and tools", () => {
 		expect(result.content.at(-1)?.text).toContain("[pi-jev] Jev flagged this output as containing a secret");
 	});
 
+	const resultEvent = { toolName: "bash", toolCallId: "c", input: { command: "cat .env" }, content: [{ type: "text", text: "OPENAI_API_KEY=sk-..." }], isError: false };
+
+	test("output.model runs the output judge; the gate keeps model", async () => {
+		const keyFile = join(root, "or.key");
+		writeFileSync(keyFile, "sk-or-test\n");
+		configure({ model: "openrouter/typesafe/jev-1.13", apiKeyFile: keyFile, output: { model: "openrouter/inception/mercury-decide" } });
+		const pi = fakePi();
+		const registry = fakeRegistry(
+			(questions) => ({ answers: "leaks_secret" in questions ? outputAnswers(0.97) : gateAnswers({ destructive: 0.99, impact: 3 }) }),
+			{ known: ["openrouter/typesafe/jev-1.13"] },
+		);
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		await pi.emit("tool_result", resultEvent, ctx);
+		expect(registry.calls.map((call) => call.model)).toEqual(["openrouter/typesafe/jev-1.13", "openrouter/inception/mercury-decide"]);
+		// Same provider: the apiKeyFile key goes to both.
+		expect(registry.calls.map((call) => call.apiKey)).toEqual(["sk-or-test", "sk-or-test"]);
+	});
+
+	test("the apiKeyFile key never goes to an output model on another provider", async () => {
+		const keyFile = join(root, "or.key");
+		writeFileSync(keyFile, "sk-or-test\n");
+		configure({ model: "openrouter/typesafe/jev-1.13", apiKeyFile: keyFile, output: { model: "typesafe/jev-latest" } });
+		const pi = fakePi();
+		const registry = fakeRegistry(() => ({ answers: outputAnswers(0.97) }));
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_result", resultEvent, ctx);
+		expect(registry.calls).toHaveLength(1);
+		expect(registry.calls[0]).toMatchObject({ model: "typesafe/jev-latest", apiKey: undefined });
+	});
+
+	test("an output model without credentials is reported at startup", async () => {
+		const keyFile = join(root, "or.key");
+		writeFileSync(keyFile, "sk-or-test\n");
+		configure({ model: "openrouter/typesafe/jev-1.13", apiKeyFile: keyFile, output: { model: "typesafe/jev-latest" } });
+		const pi = fakePi();
+		const { ctx } = await start(pi, {}, fakeRegistry(() => ({}), { configured: false }));
+		expect(ctx.notifications.some((n) => n.message.includes("no credentials for typesafe"))).toBe(true);
+	});
+
 	test("jev_ask wraps text state and accepts bool/noul", async () => {
 		const pi = fakePi();
 		const registry = fakeRegistry(() => ({ answers: { relevant: { type: "bool", probability: 0.8 } } }));
