@@ -119,8 +119,13 @@ export function hasClassifierRuntime(
 	);
 }
 
-/** The fields every OpenRouter Jev entry in pi's bundled catalog shares. */
-function openRouterJev(id: string, name: string): ClassifierModel<ClassifierApi> {
+/** A System One classifier on OpenRouter, as pi's bundled catalog lists it. */
+function openRouterSystemOne(
+	id: string,
+	name: string,
+	inputCost: number,
+	contextWindow: number,
+): ClassifierModel<ClassifierApi> {
 	return {
 		type: "classifier",
 		id,
@@ -129,13 +134,17 @@ function openRouterJev(id: string, name: string): ClassifierModel<ClassifierApi>
 		provider: "openrouter",
 		baseUrl: "https://openrouter.ai/api/v1",
 		input: ["text", "image"],
-		cost: { input: 0.042, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 262144,
+		cost: { input: inputCost, output: 0, cacheRead: 0, cacheWrite: 0 },
+		contextWindow,
 	};
 }
 
+function openRouterJev(id: string, name: string): ClassifierModel<ClassifierApi> {
+	return openRouterSystemOne(id, name, 0.042, 262144);
+}
+
 /**
- * Jev classifiers the endpoint serves but the host catalog can lose. pi 1.3.0
+ * Classifiers the endpoint serves but the host catalog can lose. pi 1.3.0
  * refreshes OpenRouter's model list from pi.dev, and that list is chat-only,
  * so it replaces the bundled entries below and `openrouter/typesafe/jev-*`
  * stops resolving. These are copied from pi's bundled OpenRouter data. The
@@ -145,6 +154,8 @@ export const BUILT_IN_CLASSIFIERS: readonly ClassifierModel<ClassifierApi>[] = [
 	openRouterJev("typesafe/jev-1.13", "TypeSafe: Jev 1.13"),
 	openRouterJev("typesafe/jev-1.14", "TypeSafe: Jev 1.14"),
 	openRouterJev("~typesafe/jev-latest", "TypeSafe: Jev Latest"),
+	openRouterSystemOne("inception/mercury-decide", "Inception: Mercury Decide", 0.02, 65536),
+	openRouterSystemOne("inception/mercury-decide:free", "Inception: Mercury Decide (free)", 0, 65536),
 ];
 
 function builtInClassifier(

@@ -8,15 +8,20 @@
  *
  *   npm run calibrate -- --model openrouter/typesafe/jev-1.13 [--runs 3]
  *   npm run calibrate -- --model cloudflare-workers-ai/@cf/cloudflare/clef
+ *   npm run calibrate -- --model inception/mercury-decide
+ *   npm run calibrate -- --model openrouter/inception/mercury-decide --api-key-file ~/.pi/agent/openrouter-jev.key
  *
  * Credentials come from pi's own store: provider env vars, ~/.pi/agent/auth.json
- * (so `/login openrouter` works), and models.json. Nothing is sent but the
- * fixtures below.
+ * (so `/login openrouter` works), and models.json; `--api-key-file` overrides
+ * them, as `apiKeyFile` does in pi-jev.json. Nothing is sent but the fixtures
+ * below. A failed request is counted and skipped, not fatal, and the run ends
+ * with request latency and token use.
  */
 
+import { readFileSync } from "node:fs";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
-import { classify, describeAnswer, type ClassifierRegistry, type JevResponse } from "../src/classifier";
-import { defaultJevConfig } from "../src/config";
+import { classify, describeAnswer, redact, type ClassifierRegistry, type JevResponse } from "../src/classifier";
+import { defaultJevConfig, expandHome } from "../src/config";
 import { buildGateState, evaluateGate, GATE_QUESTIONS } from "../src/gate";
 import { buildOutputState, evaluateOutput, OUTPUT_QUESTIONS } from "../src/output";
 
@@ -27,6 +32,8 @@ const flag = (name: string) => {
 };
 const model = flag("model") ?? "typesafe/jev-latest";
 const runs = Number(flag("runs") ?? 3);
+const apiKeyFile = flag("api-key-file");
+const apiKey = apiKeyFile ? readFileSync(expandHome(apiKeyFile), "utf8").trim() : undefined;
 const config = { ...defaultJevConfig(), model };
 
 const GATE_FIXTURES: { label: string; tool: string; input: unknown; userRequest: string; expect: "pass" | "flag" }[] = [
@@ -58,7 +65,14 @@ const OUTPUT_FIXTURES: { label: string; tool: string; input: unknown; output: st
 function range(values: number[]): string {
 	const min = Math.min(...values);
 	const max = Math.max(...values);
+	if (values.length === 0) return "n/a";
 	return min.toFixed(2) === max.toFixed(2) ? min.toFixed(2) : `${min.toFixed(2)}-${max.toFixed(2)}`;
+}
+
+/** The value at fraction `p` of the sorted samples (nearest rank). */
+function percentile(values: number[], p: number): number {
+	const sorted = [...values].sort((a, b) => a - b);
+	return sorted[Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))] ?? Number.NaN;
 }
 
 async function main() {
@@ -67,8 +81,25 @@ async function main() {
 		findOfType: (type, provider, id) => runtime.getModelOfType(type, provider, id),
 		classify: (m, context, options) => runtime.classify(m, context, options),
 	};
-	const ask = (state: Parameters<typeof classify>[1]["state"], questions: typeof GATE_QUESTIONS): Promise<JevResponse> =>
-		classify(registry, { model, state, questions, timeoutMs: 30_000 });
+	const latencies: number[] = [];
+	const errors = new Map<string, number>();
+	let inputTokens = 0;
+	const ask = async (
+		state: Parameters<typeof classify>[1]["state"],
+		questions: typeof GATE_QUESTIONS,
+	): Promise<JevResponse | undefined> => {
+		const started = performance.now();
+		try {
+			const response = await classify(registry, { model, state, questions, timeoutMs: 30_000, apiKey });
+			latencies.push(performance.now() - started);
+			inputTokens += response.usage?.input ?? 0;
+			return response;
+		} catch (error) {
+			const message = redact(error instanceof Error ? error.message : String(error));
+			errors.set(message, (errors.get(message) ?? 0) + 1);
+			return undefined;
+		}
+	};
 
 	console.log(`# ${model}, ${runs} runs per fixture\n`);
 	console.log("| State | destructive | exfiltration | beyond_scope | impact | Verdict | Expected |");
@@ -81,6 +112,7 @@ async function main() {
 				buildGateState({ cwd: "/home/dev/project", toolName: fixture.tool, input: fixture.input, userRequest: fixture.userRequest, argumentChars: config.gate.argumentChars }),
 				GATE_QUESTIONS,
 			);
+			if (!response) continue;
 			const verdict = evaluateGate(response, config);
 			scores.d.push(verdict.destructive);
 			scores.e.push(verdict.exfiltration);
@@ -101,11 +133,23 @@ async function main() {
 				buildOutputState({ cwd: "/home/dev/project", toolName: fixture.tool, input: fixture.input, output: fixture.output, isError: fixture.isError, argumentChars: config.gate.argumentChars, outputChars: config.output.outputChars }),
 				OUTPUT_QUESTIONS,
 			);
+			if (!response) continue;
 			const verdict = evaluateOutput(response, config);
 			leaks.push(verdict.leaksSecret);
 			classes.add(describeAnswer(response.answers.failure_class));
 		}
 		console.log(`| ${fixture.label} | ${range(leaks)} | ${[...classes].join("; ")} | ${fixture.expect} |`);
+	}
+
+	const failed = [...errors.values()].reduce((sum, count) => sum + count, 0);
+	console.log(`\nRequests: ${latencies.length} answered, ${failed} failed`);
+	for (const [message, count] of errors) console.log(`- ${count}x ${message}`);
+	if (latencies.length > 0) {
+		const ms = (value: number) => `${Math.round(value)} ms`;
+		console.log(
+			`Latency: median ${ms(percentile(latencies, 0.5))}, p95 ${ms(percentile(latencies, 0.95))}, max ${ms(Math.max(...latencies))}`,
+		);
+		console.log(`Input tokens: ${inputTokens} total, ${Math.round(inputTokens / latencies.length)} per request`);
 	}
 }
 
