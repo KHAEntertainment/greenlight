@@ -36,8 +36,8 @@ Notes:
 
 ## Releasing
 
-1. Bump `version` in `package.json` past the last published version (next:
-   `0.4.1` or later; `0.4.0` is taken), merge to `main`.
+1. Bump `version` in `package.json` past the last published version
+   (`npm view @khaentertainment/pi-jev2 version`), merge to `main`.
 2. Publish a GitHub release for that commit. `.github/workflows/publish.yml`
    runs on `release: published`, exchanges its OIDC token, and runs
    `npm publish --access public` with provenance.
