@@ -6,6 +6,38 @@ where to pick up. Append a new entry when you stop.
 
 ---
 
+## 2026-10-20 to 2026-10-24: local session 1, releases, dogfooding, first live escalations
+
+**Shipped:**
+- **0.4.0** on npm. It was published by hand by `bbrenner2217` with passkey 2FA, and the trusted publisher was saved afterwards (`PUBLISHING.md`).
+- **0.4.1:** the README rewrite. Its release run failed in the OIDC preflight, because npm answers `201` and the script accepted only `200`. That was fixed in #8 and published by `workflow_dispatch`.
+- **0.4.2:** startup stays quiet when both judges are off, and `/jev on` repeats the notices startup skipped (#9). The preflight now redacts at any depth and in keys. This release published itself on the GitHub release.
+- **Reviews:** #8, #9 and #10 were reviewed by Codex `gpt-6.1-sol` with `/traycer-review` while CodeRabbit was rate-limited, which is now the owner's standing rule. They found four real issues in three rounds, all fixed.
+
+**Dogfood setup on the owner's machine:**
+- pi-jev2 0.4.2 is installed globally, with `gate.enabled` and `output.enabled` set to false in `~/.pi/agent/pi-jev.json`.
+- `KHAEntertainment/view-limits` turns both judges on, in `escalate` mode, through a committed `.pi/pi-jev.json` (view-limits#77). Every Traycer worktree branched from its `main` picks this up through git. pi reads project settings from `<cwd>/.pi/` only, so a local install would not reach worktrees.
+- No project trust is needed, because pi doesn't treat `pi-jev.json` as protected. That avoids the pi-mcp-adapter 5.2.0 crash seen in trusted view-limits checkouts.
+- `../pi-jev2-sandbox` keeps its `git:` install of `main` and gives the global npm copy an empty `extensions` list. Two copies registering `jev_escalate` broke startup.
+
+**First live escalations (Traycer 1.5.1).** A pi `MiniMax-M3.1-Flash` child ran in a throwaway view-limits worktree, with a Claude parent in the same task.
+- **Deny:** `rm -rf lib && rm -rf test` scored destructive 0.98. The parent denied it. The child read `[pi-jev] … denied` and did not retry. Nothing was deleted.
+- **Approve:** `rm -rf docs` scored destructive 0.97. The parent approved it. The identical retry ran, and `docs/` was gone.
+- **No answer:** a retry 90 s in was blocked under the same request id, and no second request reached the parent (dedupe). A retry after 300 s got the enforce rule's confirm. Traycer's host answers pi dialogs with `cancelled` when no UI handler is attached (`handleExtensionUiRequest` in `~/.traycer/host/install/host-runtime/host-main.cjs`), so the result was `(declined)`.
+  - So under Traycer, no answer means blocked, not run, despite `blockWithoutUI: false`.
+  - After that, a late reply to the old request is ignored, and the next retry opens a new request (`src/index.ts`, around line 620).
+  - Documented in `docs/REFERENCE.md` → Transports.
+- **Cost note:** every retry is classified again, because each Traycer turn is a new pi process with an empty verdict cache.
+
+**Not verified:**
+- `escalate` → human (the 30-minute wait);
+- a pi parent (for example a pi orchestrator under Foreman);
+- the timeout path for `jev_escalate`.
+
+**Next:** #6. Inception's Mercury Decide speaks System One on `api.inceptionlabs.ai/v1/systemone` (undocumented) and on `/v1/decisions`. pi's `typesafe-system-one` API should reach it through a built-in definition. CLEF comes after it.
+
+---
+
 ## 2026-10-19: local session 1, Traycer replies arrive as chat input
 
 Asked: "fix it", after a live Traycer probe showed the escalation reaching the parent but the parent's deny never reaching the gate.

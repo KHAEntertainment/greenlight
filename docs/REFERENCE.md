@@ -86,7 +86,7 @@ The output judge reads what reaches the model. For a script that is the `codemod
 - **deny**: the call is blocked, with `denied by <who>: <reason>` in the tool result the model reads.
 - **escalate**: it has handed the question to a human. The wait extends from `timeoutSeconds` (300) to `humanTimeoutSeconds` (1800), and the final approve/deny still decides.
 
-**No answer is not a deny.** If the orchestrator is unreachable, times out, cancels, or replies with something that is not a decision, the call goes through the enforce rule: a local confirm with a UI, `blockWithoutUI` without one. Escalate mode is opt-in like enforce: it can stop the agent, so it is never the default.
+**No answer is not a deny.** If the orchestrator is unreachable, times out, cancels, or replies with something that is not a decision, the call goes through the enforce rule: a local confirm with a UI, `blockWithoutUI` without one. Under Traycer, pi reports a UI but Traycer's host answers its dialogs with "cancelled", so the confirm resolves to `(declined)` and the call is blocked (verified 2026-10-24, Traycer 1.5.1). Escalate mode is opt-in like enforce: it can stop the agent, so it is never the default.
 
 Every escalation is journaled (`/jev log`) with its decision, who made it, the transport, and the latency, or `fallback` with the reason.
 
@@ -108,7 +108,8 @@ Traycer (verified on 1.5.1) holds a message for a busy agent until its turn ends
 1. The flagged call is blocked at once with `asked <parent> for a decision, request <id>`, and the agent is told to end its turn and wait. Identical calls while it waits are blocked without sending again.
 2. The parent's reply arrives as the next prompt. The extension's `input` handler takes it when it carries the request's `id`; a deny or escalate without one is taken when Traycer's header names the parent and only one request is waiting on it, while an approve must name its request. A reply whose header names any other agent is ignored. The model reads a short `[pi-jev]` note in place of the raw reply.
 3. A retry of that exact call uses the decision once: an approve lets it run, a deny blocks it with `denied by <parent>: <reason>`. A changed call is a new request.
-4. With no reply within `escalation.timeoutSeconds` (`humanTimeoutSeconds` once the parent escalates to a human), the next retry falls back to the `enforce` rule, as for any orchestrator that does not answer. An unused decision goes stale after `timeoutSeconds`.
+4. With no reply within `escalation.timeoutSeconds` (`humanTimeoutSeconds` once the parent escalates to a human), the next retry falls back to the `enforce` rule, as for any orchestrator that does not answer. On Traycer that is a blocked call, `<verdict> (declined)`, because the host cancels the confirm dialog. That retry closes the wait: a late reply to the old request is ignored, and the next retry of the call sends the parent a new request. An unused decision goes stale after `timeoutSeconds`.
+5. Each Traycer turn is a new pi process, so the verdict cache is empty on a retry and the call is classified again: one classifier request per retry.
 
 Traycer runs each turn in a new pi process, so the wait is stored in the session (`jev-deferred` entries: request id, recipient, deadline, and a SHA-256 of the call, never its text) and restored at session start. Only the wait is stored, never a decision, and a stored wait is restored only when its recipient is still this agent's parent. The request id is derived from the call's slot and a random nonce, and is re-checked on restore. Traycer puts its own `# Workspace Directories` preamble above the sender header, so the header is read from the first line or the first line after that preamble, and nowhere else.
 
