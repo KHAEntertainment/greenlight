@@ -297,10 +297,15 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	function warnOnce(ctx: ExtensionContext, key: string, message: string): void {
+	function warnOnce(
+		ctx: ExtensionContext,
+		key: string,
+		message: string,
+		type: "info" | "warning" = "warning",
+	): void {
 		if (warnedOnce.has(key)) return;
 		warnedOnce.add(key);
-		ctx.ui.notify(message, "warning");
+		ctx.ui.notify(message, type);
 	}
 
 	function registryOf(ctx: ExtensionContext): ClassifierRegistry | undefined {
@@ -411,27 +416,31 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 		inactive = checkReady(ctx);
 		syncEscalateTool(ctx);
+		// With both judges off (a global install switched on per project),
+		// nothing here will classify, so the classifier notices are noise.
+		const judging = gateOn || outputOn;
 		if (inactive) {
-			warnOnce(ctx, inactive, `pi-jev: ${inactive}; the judges are inactive until then.`);
+			if (judging) warnOnce(ctx, inactive, `pi-jev: ${inactive}; the judges are inactive until then.`);
 			ctx.ui.setStatus(STATUS_KEY, undefined);
 			return;
 		}
 		const registry = registryOf(ctx);
-		if (registry && usesBuiltInDefinition(registry, config.model)) {
+		if (judging && registry && usesBuiltInDefinition(registry, config.model)) {
 			warnOnce(
 				ctx,
 				`built-in:${config.model}`,
 				`pi-jev: ${config.model} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
+				"info",
 			);
 		}
-		if (mode !== "shadow" && !isCalibratedModel(config.model)) {
+		if (gateOn && mode !== "shadow" && !isCalibratedModel(config.model)) {
 			warnOnce(
 				ctx,
 				`uncalibrated:${config.model}`,
 				`pi-jev: ${config.model} is not a Jev model; the thresholds were measured on Jev, so it may flag too much or too little. Run \`npm run calibrate -- --model ${config.model}\` before relying on ${mode}.`,
 			);
 		}
-		if (mode === "escalate" && !escalatorFor(ctx)) {
+		if (gateOn && mode === "escalate" && !escalatorFor(ctx)) {
 			warnOnce(
 				ctx,
 				"no-transport",
