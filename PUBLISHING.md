@@ -5,17 +5,17 @@
 The package moves from `@khaentertainment/pi-jev2` to
 `@khaentertainment/pi-greenlight`, and the repository from
 `KHAEntertainment/pi-jev2` to `KHAEntertainment/greenlight`. `0.5.0` is the
-first version under the new name. The old package keeps `0.4.0` to `0.4.4`; the
-owner will deprecate it with a pointer to the new one (last row below).
+first version under the new name. The old package keeps `0.4.0` to `0.4.4` and
+is deprecated with a pointer to the new one.
 
 | Step | State |
 |---|---|
 | `@khaentertainment` scope | Exists: an npm organization owned by `bbrenner2217`. |
-| Repository rename | TODO (owner): `KHAEntertainment/pi-jev2` -> `KHAEntertainment/greenlight`, before any workflow publish, because the OIDC token names the repository. |
-| Bootstrap publish | TODO (owner): publish `0.5.0` by hand from `main` with passkey 2FA (`npm publish --access public`). npm cannot attach a trusted publisher to a package that does not exist yet. |
-| Trusted publisher | TODO (owner): on the new package's settings page, user `KHAEntertainment`, repository `greenlight`, workflow `publish.yml`, environment empty. **Allow npm publish** off, so the workflow can only stage (`npm stage publish`), and **allow npm dist-tag** off. A new trusted publisher expires unless its first successful publish happens within 2 days, so cut the next release (`0.5.1`) from the workflow and approve it within 2 days of saving it. npm's docs do not say whether a staged version counts before it is approved. The preflight's OIDC exchange is not a publish. An expired one cannot be used or edited: delete it and add it again before releasing. |
-| Publishing access | TODO (owner): "Require two-factor authentication and disallow tokens". |
-| Old package | TODO (owner): `npm deprecate @khaentertainment/pi-jev2 "Renamed to @khaentertainment/pi-greenlight"`. |
+| Repository rename | Done 2026-10-25: `KHAEntertainment/pi-jev2` -> `KHAEntertainment/greenlight` (GitHub redirects the old URLs), and detached from `y0usaf/pi-jev`'s fork network. |
+| Bootstrap publish | Done 2026-10-25: `0.5.0` published by hand from `main` at `e40458c` by `bbrenner2217` with passkey 2FA, from a real terminal (under a non-interactive shell npm exits with `EOTP` instead of waiting for the passkey). No provenance, because it did not come from the workflow. |
+| Trusted publisher | Saved 2026-10-25: user `KHAEntertainment`, repository `greenlight`, workflow `publish.yml`, environment empty. **Allow npm publish** off, so the workflow can only stage (`npm stage publish`); **allow npm dist-tag** off. Validated by `0.5.1`, the first workflow release: staged from `f2c6d0e` with provenance and approved by the owner the same day. |
+| Publishing access | "Require two-factor authentication and disallow tokens", set by the owner with the trusted publisher. |
+| Old package | Done 2026-10-25: `@khaentertainment/pi-jev2` is deprecated with "Renamed to @khaentertainment/pi-greenlight". |
 
 ## pi-jev2 history, verified 2026-10-20
 
@@ -25,9 +25,9 @@ trusted publishing (OIDC), with no npm token in the repository or the workflow.
 | Step | State |
 |---|---|
 | `@khaentertainment` scope | Exists: an npm organization owned by `bbrenner2217`. |
-| Bootstrap publish | Done: `0.4.0` was published by hand on 2026-10-20 from `main` at `a2050d7`, by `bbrenner2217` with passkey 2FA (`auth-and-writes`). It has no provenance attestation, because it did not come from the workflow. |
-| Trusted publisher | Saved on the package's settings page: user `KHAEntertainment`, repository `pi-jev2`, workflow `publish.yml`, environment empty. **Allow npm publish** is on; **allow npm dist-tag** is off. |
-| Publishing access | "Require two-factor authentication and disallow tokens" (set by the owner 2026-10-20). The trusted publisher is the only way in without a passkey. |
+| Bootstrap publish | Done 2026-10-25: `0.5.0` published by hand from `main` at `e40458c` by `bbrenner2217` with passkey 2FA, from a real terminal (under a non-interactive shell npm exits with `EOTP` instead of waiting for the passkey). No provenance, because it did not come from the workflow. |
+| Trusted publisher | Saved 2026-10-25: user `KHAEntertainment`, repository `greenlight`, workflow `publish.yml`, environment empty. **Allow npm publish** off, so the workflow can only stage (`npm stage publish`); **allow npm dist-tag** off. Validated by `0.5.1`, the first workflow release: staged from `f2c6d0e` with provenance and approved by the owner the same day. |
+| Publishing access | "Require two-factor authentication and disallow tokens", set by the owner with the trusted publisher. |
 
 Notes:
 
