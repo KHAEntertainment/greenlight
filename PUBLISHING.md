@@ -13,7 +13,7 @@ owner will deprecate it with a pointer to the new one (last row below).
 | `@khaentertainment` scope | Exists: an npm organization owned by `bbrenner2217`. |
 | Repository rename | TODO (owner): `KHAEntertainment/pi-jev2` -> `KHAEntertainment/greenlight`, before any workflow publish, because the OIDC token names the repository. |
 | Bootstrap publish | TODO (owner): publish `0.5.0` by hand from `main` with passkey 2FA (`npm publish --access public`). npm cannot attach a trusted publisher to a package that does not exist yet. |
-| Trusted publisher | TODO (owner): on the new package's settings page, user `KHAEntertainment`, repository `greenlight`, workflow `publish.yml`, environment empty. **Allow npm publish** on, **allow npm dist-tag** off. A new trusted publisher expires unless its first successful workflow publish happens within 2 days, so cut the next release (`0.5.1`) from the workflow within 2 days of saving it. The preflight's OIDC exchange is not a publish. An expired one cannot be used or edited: delete it and add it again before releasing. |
+| Trusted publisher | TODO (owner): on the new package's settings page, user `KHAEntertainment`, repository `greenlight`, workflow `publish.yml`, environment empty. **Allow npm publish** off, so the workflow can only stage (`npm stage publish`), and **allow npm dist-tag** off. A new trusted publisher expires unless its first successful publish happens within 2 days, so cut the next release (`0.5.1`) from the workflow and approve it within 2 days of saving it. npm's docs do not say whether a staged version counts before it is approved. The preflight's OIDC exchange is not a publish. An expired one cannot be used or edited: delete it and add it again before releasing. |
 | Publishing access | TODO (owner): "Require two-factor authentication and disallow tokens". |
 | Old package | TODO (owner): `npm deprecate @khaentertainment/pi-jev2 "Renamed to @khaentertainment/pi-greenlight"`. |
 
@@ -57,8 +57,11 @@ Notes:
    (`npm view @khaentertainment/pi-greenlight version`), merge to `main`.
 2. Publish a GitHub release for that commit. `.github/workflows/publish.yml`
    runs on `release: published`, exchanges its OIDC token, and runs
-   `npm publish --access public` with provenance.
-3. If the publish step fails, read the `Preflight - OIDC trusted-publishing
+   `npm stage publish --access public --provenance`. Nothing is public yet.
+3. Approve it from a real terminal (approval needs a passkey and cannot use
+   OIDC): `npm stage list @khaentertainment/pi-greenlight`, then
+   `npm stage approve <stage-id>`. `npm stage reject <stage-id>` drops it.
+4. If the publish step fails, read the `Preflight - OIDC trusted-publishing
    check` step: it prints the registry's own answer, which `npm publish` hides.
    A dry run is available from the Actions tab (`workflow_dispatch`, dry-run on).
 

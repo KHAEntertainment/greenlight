@@ -58,6 +58,7 @@ jobs:
 
       - name: Publish
         if: github.event_name == 'release' || inputs['dry-run'] == false
-        # No token: npm exchanges the OIDC token from this job for publish
-        # rights, and attaches provenance automatically.
-        run: npm publish --access public
+        # No token: npm exchanges the OIDC token from this job. The trusted
+        # publisher allows staging only, so the version waits in npm's stage
+        # until the owner approves it with 2FA (`npm stage approve <id>`).
+        run: npm stage publish --access public --provenance
