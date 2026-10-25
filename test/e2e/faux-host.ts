@@ -1,6 +1,6 @@
 /**
  * Test-only pi extension: a scripted chat model and a fake System One
- * classifier, so the real pi binary can run pi-jev end to end with no
+ * classifier, so the real pi binary can run greenlight end to end with no
  * network and no keys.
  *
  * - `faux/scripted` answers the first prompt with one `bash` tool call

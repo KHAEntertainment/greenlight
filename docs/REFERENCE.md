@@ -1,6 +1,6 @@
-# pi-jev2 reference
+# Greenlight reference
 
-The full technical reference for [pi-jev2](../README.md): providers, the two judges, escalation transports, configuration, what leaves the machine, and the calibration data behind every threshold. Start with the README if you are new.
+The full technical reference for [Greenlight](../README.md): providers, the two judges, escalation transports, configuration, what leaves the machine, and the calibration data behind every threshold. Start with the README if you are new.
 
 Requirements: pi 0.99 or later, because classification goes through pi's own classifier runtime, which arrived in 0.99.0. On an older host the extension loads, says so once, and stays out of the way. The classifier's provider needs credentials; without them the extension loads, names the login or env var it needs once, and stays out of the way.
 
@@ -25,7 +25,7 @@ Other System One models fill the same seat: `cloudflare-workers-ai/@cf/cloudflar
 
 **OpenRouter's Jev models can be missing from pi's catalog.** pi 1.3.0 refreshes OpenRouter's model list from pi.dev, and that list holds only chat models, so it replaces the bundled `openrouter/typesafe/jev-*` entries. The extension carries those three definitions, the two `inception/mercury-decide` ones and the three `cloudflare/clef*` ones, copied from pi's bundled data, and uses one only when the catalog has no entry for it. It says so once at startup. The catalog always wins when it has the model.
 
-**Keeping OpenRouter's chat models out of pi.** `/login openrouter` or `OPENROUTER_API_KEY` makes all of OpenRouter's chat models (about 400) available in `/model` and to RPC hosts such as Traycer; `enabledModels` only limits startup selection and cycling. To use OpenRouter for Jev alone, give the key to this extension only: put it in a file, set `apiKeyFile` and `model` in the global `~/.pi/agent/pi-jev.json`, and do not log pi in to OpenRouter. `pi auth check --provider openrouter` then stays `not_ready`, and `pi --list-models openrouter` lists nothing.
+**Keeping OpenRouter's chat models out of pi.** `/login openrouter` or `OPENROUTER_API_KEY` makes all of OpenRouter's chat models (about 400) available in `/model` and to RPC hosts such as Traycer; `enabledModels` only limits startup selection and cycling. To use OpenRouter for Jev alone, give the key to this extension only: put it in a file, set `apiKeyFile` and `model` in the global `~/.pi/agent/greenlight.json`, and do not log pi in to OpenRouter. `pi auth check --provider openrouter` then stays `not_ready`, and `pi --list-models openrouter` lists nothing.
 
 ```json
 { "model": "openrouter/typesafe/jev-1.14", "apiKeyFile": "~/.pi/agent/openrouter-jev.key" }
@@ -39,7 +39,7 @@ npm run calibrate -- --model cloudflare-workers-ai/@cf/cloudflare/clef --runs 3
 
 That runs the calibration fixtures below through the extension's own code path and prints rows for the table. AGENTS.md asks for a measurement before a threshold changes, and that applies per model.
 
-`apiKey` / `apiKeyFile` in `pi-jev.json` still work as an explicit override, passed to whichever provider `model` names. `output.model` gets them only when it is on that same provider; a model on another provider uses pi's own credentials for it, so a key is never sent to a provider that did not issue it.
+`apiKey` / `apiKeyFile` in `greenlight.json` still work as an explicit override, passed to whichever provider `model` names. `output.model` gets them only when it is on that same provider; a model on another provider uses pi's own credentials for it, so a key is never sent to a provider that did not issue it.
 
 **Inception's own API is not reachable yet.** Inception serves Mercury Decide at `api.inceptionlabs.ai` (System One at `/v1/systemone`), but pi has no classifier implementation for an `inception` provider (`Provider inception does not support classification`), and a `models.json` provider is chat-only. Use the OpenRouter route. See issue #6.
 
@@ -85,7 +85,7 @@ The output judge reads what reaches the model. For a script that is the `codemod
 
 ## Escalation
 
-`gate.mode: "escalate"` (or `/jev mode escalate`) sends a flagged call to whoever manages this agent. Over A2A and a Pi parent, the call is held until it answers, and the agent cannot continue past it meanwhile. Over Traycer, the call is blocked at once and a retry uses the answer; see [Transports](#transports). The orchestrator can:
+`gate.mode: "escalate"` (or `/greenlight mode escalate`) sends a flagged call to whoever manages this agent. Over A2A and a Pi parent, the call is held until it answers, and the agent cannot continue past it meanwhile. Over Traycer, the call is blocked at once and a retry uses the answer; see [Transports](#transports). The orchestrator can:
 
 - **approve**: the call runs.
 - **deny**: the call is blocked, with `denied by <who>: <reason>` in the tool result the model reads.
@@ -93,7 +93,7 @@ The output judge reads what reaches the model. For a script that is the `codemod
 
 **No answer is not a deny.** If the orchestrator is unreachable, times out, cancels, or replies with something that is not a decision, the call goes through the enforce rule: a local confirm with a UI, `blockWithoutUI` without one. Under Traycer, pi reports a UI but Traycer's host answers its dialogs with "cancelled", so the confirm resolves to `(declined)` and the call is blocked (verified 2026-10-24, Traycer 1.5.1). Escalate mode is opt-in like enforce: it can stop the agent, so it is never the default.
 
-Every escalation is journaled (`/jev log`) with its decision, who made it, the transport, and the latency, or `fallback` with the reason.
+Every escalation is journaled (`/greenlight log`) with its decision, who made it, the transport, and the latency, or `fallback` with the reason.
 
 ### Transports
 
@@ -111,18 +111,18 @@ Set `transport` to one of these to force it, or to `none` to treat escalate as e
 
 Traycer (verified on 1.5.1) holds a message for a busy agent until its turn ends, so a gated call cannot wait in-turn for the reply. Escalation over Traycer is therefore block-then-retry:
 1. The flagged call is blocked at once with `asked <parent> for a decision, request <id>`, and the agent is told to end its turn and wait. Identical calls while it waits are blocked without sending again.
-2. The parent's reply arrives as the next prompt. The extension's `input` handler takes it when it carries the request's `id`; a deny or escalate without one is taken when Traycer's header names the parent and only one request is waiting on it, while an approve must name its request. A reply whose header names any other agent is ignored. The model reads a short `[pi-jev]` note in place of the raw reply.
+2. The parent's reply arrives as the next prompt. The extension's `input` handler takes it when it carries the request's `id`; a deny or escalate without one is taken when Traycer's header names the parent and only one request is waiting on it, while an approve must name its request. A reply whose header names any other agent is ignored. The model reads a short `[greenlight]` note in place of the raw reply.
 3. A retry of that exact call uses the decision once: an approve lets it run, a deny blocks it with `denied by <parent>: <reason>`. A changed call is a new request.
 4. With no reply within `escalation.timeoutSeconds` (`humanTimeoutSeconds` once the parent escalates to a human), the next retry falls back to the `enforce` rule, as for any orchestrator that does not answer. On Traycer that is a blocked call, `<verdict> (declined)`, because the host cancels the confirm dialog. That retry closes the wait: a late reply to the old request is ignored, and the next retry of the call sends the parent a new request. An unused decision goes stale after `timeoutSeconds`.
 5. Each Traycer turn is a new pi process, so the verdict cache is empty on a retry and the call is classified again: one classifier request per retry.
 
-Traycer runs each turn in a new pi process, so the wait is stored in the session (`jev-deferred` entries: request id, recipient, deadline, and a SHA-256 of the call, never its text) and restored at session start. Only the wait is stored, never a decision, and a stored wait is restored only when its recipient is still this agent's parent. The request id is derived from the call's slot and a random nonce, and is re-checked on restore. Traycer puts its own `# Workspace Directories` preamble above the sender header, so the header is read from the first line or the first line after that preamble, and nowhere else.
+Traycer runs each turn in a new pi process, so the wait is stored in the session (`greenlight-deferred` entries: request id, recipient, deadline, and a SHA-256 of the call, never its text) and restored at session start. Only the wait is stored, never a decision, and a stored wait is restored only when its recipient is still this agent's parent. The request id is derived from the call's slot and a random nonce, and is re-checked on restore. Traycer puts its own `# Workspace Directories` preamble above the sender header, so the header is read from the first line or the first line after that preamble, and nowhere else.
 
-The block in step 1 is a wait, not a decision: the call runs as soon as the parent approves. `jev_escalate` works the same way over Traycer: it returns at once, and the decision arrives as the next message.
+The block in step 1 is a wait, not a decision: the call runs as soon as the parent approves. `greenlight_escalate` works the same way over Traycer: it returns at once, and the decision arrives as the next message.
 
 The parent is `escalation.traycer.parentAgentId`, else `TRAYCER_PARENT_AGENT_ID`, else this agent's parent in `traycer agent list --json`.
 
-**A2A**: the request rides as a `data` part (schema `pi-jev.escalation/v1`) plus a text summary. A bare origin as `url` is resolved through `/.well-known/agent-card.json`. Task states map like this:
+**A2A**: the request rides as a `data` part (schema `greenlight.escalation/v1`) plus a text summary. A bare origin as `url` is resolved through `/.well-known/agent-card.json`. Task states map like this:
 
 | Task state | Means |
 |---|---|
@@ -133,12 +133,12 @@ The parent is `escalation.traycer.parentAgentId`, else `TRAYCER_PARENT_AGENT_ID`
 
 A bearer token comes from the env var named by `a2a.tokenEnv`, or from `a2a.tokenFile`. It is scrubbed from notifications like the API key.
 
-`escalation.transport`, `escalation.a2a` and `escalation.traycer` are read from the global `~/.pi/agent/pi-jev.json` only. A repository's `.pi/pi-jev.json` that sets them is ignored with a warning, because otherwise a cloned repo could send your token to its own server and have that server approve flagged calls, pick the Traycer agent that decides, or choose the command that runs. See [Configure](#configure) for the rest of what a project file may set.
+`escalation.transport`, `escalation.a2a` and `escalation.traycer` are read from the global `~/.pi/agent/greenlight.json` only. A repository's `.pi/greenlight.json` that sets them is ignored with a warning, because otherwise a cloned repo could send your token to its own server and have that server approve flagged calls, pick the Traycer agent that decides, or choose the command that runs. See [Configure](#configure) for the rest of what a project file may set.
 
 **Pi parent over RPC**: the child emits
 
 ```json
-{"type":"extension_ui_request","id":"…","method":"input","title":"pi-jev escalation","placeholder":"{\"schema\":\"pi-jev.escalation/v1\",\"tool\":\"bash\",…}","timeout":300000}
+{"type":"extension_ui_request","id":"…","method":"input","title":"greenlight escalation","placeholder":"{\"schema\":\"greenlight.escalation/v1\",\"tool\":\"bash\",…}","timeout":300000}
 ```
 
 and the parent answers on the child's stdin with
@@ -155,7 +155,7 @@ Every transport carries the same object:
 
 ```json
 {
-  "schema": "pi-jev.escalation/v1",
+  "schema": "greenlight.escalation/v1",
   "id": "…",
   "source": "gate",
   "tool": "bash",
@@ -169,11 +169,11 @@ Every transport carries the same object:
 
 `arguments` are elided with the gate's `argumentChars` rule and then scrubbed of credentials (see [What leaves the machine](#what-leaves-the-machine)). Replies are parsed with care, because the orchestrator is often another model. JSON comes first. A reply that is a single word comes next: `approve`/`yes`/`ok`, `deny`/`no`, or `escalate`. Last is an unambiguous leading word followed by punctuation, such as `deny: touches prod`. Anything else, `Run this past the user first` included, is no answer, and the local rule decides.
 
-### `jev_escalate`
+### `greenlight_escalate`
 
-When an orchestrator is reachable, the model also gets `jev_escalate({ question, action? })`: the same channel, opened by the agent itself, for decisions it should not make alone. It blocks until a decision and returns `approved by …` or `denied by …`. Over Traycer it returns at once instead, and the decision arrives as the agent's next message. Without an orchestrator the tool is not declared to the model.
+When an orchestrator is reachable, the model also gets `greenlight_escalate({ question, action? })`: the same channel, opened by the agent itself, for decisions it should not make alone. It blocks until a decision and returns `approved by …` or `denied by …`. Over Traycer it returns at once instead, and the decision arrives as the agent's next message. Without an orchestrator the tool is not declared to the model.
 
-## `jev_ask`
+## `greenlight_ask`
 
 For decisions that should come back typed rather than written:
 
@@ -194,7 +194,7 @@ For decisions that should come back typed rather than written:
 
 ## Configure
 
-`~/.pi/agent/pi-jev.json`, or project-scoped `.pi/pi-jev.json`. A file only overrides the keys it sets. A key the extension does not know, or a value it cannot use, is ignored with a warning when the session starts.
+`~/.pi/agent/greenlight.json`, or project-scoped `.pi/greenlight.json`. A file only overrides the keys it sets. A key the extension does not know, or a value it cannot use, is ignored with a warning when the session starts.
 
 A project file comes with the repository, so it is not trusted to weaken your settings. It can tighten the gate but not loosen it:
 
@@ -246,24 +246,24 @@ Credentials are the provider's, resolved by pi: its env var, `~/.pi/agent/auth.j
 
 ## Commands
 
-- `/jev` shows mode, model (and whether it is calibrated), auth source, escalation transport, judged tools, and cache size
-- `/jev on` and `/jev off` toggle both judges for the session
-- `/jev mode shadow|enforce|escalate` switches gate modes without a reload
-- `/jev last` prints the last gate verdict with all four answers
-- `/jev output` prints the last judged output: leak probability and failure class
-- `/jev log` prints the recent journal: every flagged verdict, leak/advice notice, and escalation
-- `/jev check <text>` runs the gate questions against text you supply
+- `/greenlight` shows mode, model (and whether it is calibrated), auth source, escalation transport, judged tools, and cache size
+- `/greenlight on` and `/greenlight off` toggle both judges for the session
+- `/greenlight mode shadow|enforce|escalate` switches gate modes without a reload
+- `/greenlight last` prints the last gate verdict with all four answers
+- `/greenlight output` prints the last judged output: leak probability and failure class
+- `/greenlight log` prints the recent journal: every flagged verdict, leak/advice notice, and escalation
+- `/greenlight check <text>` runs the gate questions against text you supply
 
 ## The journal
 
 A flagged gate verdict, a leak or failure-class output verdict, and an escalation outcome are appended to
-the session with `pi.appendEntry("jev", ...)`. They are pi custom entries, so they
+the session with `pi.appendEntry("greenlight", ...)`. They are pi custom entries, so they
 never enter the LLM context, and each one renders a verdict that was already
-computed: the journal costs **no Jev requests**. `/jev last`, `/jev output`, and
-`/jev log` read it, so both survive `/reload`, `/resume`, and `/fork` instead of
+computed: the journal costs **no Jev requests**. `/greenlight last`, `/greenlight output`, and
+`/greenlight log` read it, so both survive `/reload`, `/resume`, and `/fork` instead of
 being lost with the process.
 
-The last 100 records are kept in memory and rehydrated on load; `/jev log` prints
+The last 100 records are kept in memory and rehydrated on load; `/greenlight log` prints
 the most recent 10. Clean calls are not journaled - a flag is the record worth
 keeping. A record that cannot be parsed is dropped rather than thrown, because
 session files are hand-editable, and a journal write that fails leaves the tool
@@ -472,7 +472,7 @@ src/escalators/pi-rpc.ts  Pi parent over RPC, and relayChildEscalation for the p
 src/escalators/traycer.ts Traycer through its CLI
 src/escalators/a2a.ts     A2A v1.0 JSON-RPC client (fetch only)
 src/journal.ts            the persisted verdict and escalation records: read, write, and cap
-src/index.ts              pi wiring: tool_call and tool_result handlers, jev_ask, jev_escalate, /jev
+src/index.ts              pi wiring: tool_call and tool_result handlers, greenlight_ask, greenlight_escalate, /greenlight
 scripts/calibrate.ts      the calibration fixtures against any classifier
 test/                     bun tests; test/e2e runs the real pi binary in RPC mode
 ```

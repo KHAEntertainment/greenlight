@@ -1,9 +1,9 @@
 /**
  * Verdict journal: what the extension already decided, kept in the session so
- * `/jev last`, `/jev output`, and `/jev log` survive a reload, a resume, or a
+ * `/greenlight last`, `/greenlight output`, and `/greenlight log` survive a reload, a resume, or a
  * fork - which is exactly when a record of what fired is worth having.
  *
- * A record is written with `pi.appendEntry("jev", ...)`: a pi custom entry that
+ * A record is written with `pi.appendEntry("greenlight", ...)`: a pi custom entry that
  * never enters the LLM context and costs no Jev request, because it renders a
  * verdict that was already computed.
  *
@@ -19,19 +19,19 @@ import type { OutputVerdict } from "./output";
 import type { EscalationOutcome } from "./escalation";
 
 /** Exactly this customType identifies our entries; anything else is not ours. */
-export const JOURNAL_TYPE = "jev";
+export const JOURNAL_TYPE = "greenlight";
 
 /**
  * Records kept in memory and rehydrated. The session file itself is append-only
  * (pi forbids editing entries), so this caps what the extension holds and what
- * `/jev log` prints, not what has been written.
+ * `/greenlight log` prints, not what has been written.
  */
 export const JOURNAL_CAP = 100;
 
-/** How many records `/jev log` prints. */
+/** How many records `/greenlight log` prints. */
 export const JOURNAL_TAIL = 10;
 
-/** A flagged gate verdict, as `/jev last` shows it. */
+/** A flagged gate verdict, as `/greenlight last` shows it. */
 export interface GateRecord {
 	kind: "gate";
 	at: number;
@@ -42,7 +42,7 @@ export interface GateRecord {
 	answers: string;
 }
 
-/** A leak/advice output verdict, as `/jev output` shows it. */
+/** A leak/advice output verdict, as `/greenlight output` shows it. */
 export interface OutputRecord {
 	kind: "output";
 	at: number;
@@ -155,7 +155,7 @@ export function capped(records: JournalRecord[]): JournalRecord[] {
 	return records.length > JOURNAL_CAP ? records.slice(-JOURNAL_CAP) : records;
 }
 
-/** The newest record of a kind, so `/jev last` reads the same live and reloaded. */
+/** The newest record of a kind, so `/greenlight last` reads the same live and reloaded. */
 export function newest(
 	records: JournalRecord[],
 	kind: JournalRecord["kind"],

@@ -1,8 +1,35 @@
 # Session notes and handoff
 
-Running log for the pi-jev2 fork. Newest session first. Each entry records what
+Running log for Greenlight (formerly pi-jev2). Newest session first. Each entry records what
 was asked, what was decided and why, what is verified, what is not, and exactly
 where to pick up. Append a new entry when you stop.
+
+---
+
+## 2026-10-24 to 2026-10-25: local session 1, 0.4.4 and the rename to Greenlight
+
+**Shipped:**
+- **0.4.4** on npm (#14, #15), with provenance: CLEF built-ins for OpenRouter, and Clef Flash through OpenRouter counted as calibrated. Rows in `docs/REFERENCE.md` → Calibration → CLEF.
+- The owner's global config sends output checks to `openrouter/inception/mercury-decide`; the gate stays on Jev (backup `~/.pi/agent/pi-jev.json.pre-mercury.bak`).
+
+**Rename, decided by the owner:** the project becomes **Greenlight**. The repository becomes `KHAEntertainment/greenlight`, the npm package `@khaentertainment/pi-greenlight` (the `pi-` prefix and `pi-package` keyword keep it in Pi's gallery), version `0.5.0`. It is a clean break with no fallback to the old names:
+
+| Old | New |
+|---|---|
+| `pi-jev.json` (global and project) | `greenlight.json` |
+| `/jev` | `/greenlight` |
+| `jev_ask`, `jev_escalate` | `greenlight_ask`, `greenlight_escalate` |
+| `[pi-jev]`, `pi-jev:`, `jev:` message prefixes and status | `[greenlight]`, `greenlight:` |
+| `pi-jev.escalation/v1` | `greenlight.escalation/v1` |
+| `jev` / `jev-deferred` session entries | `greenlight` / `greenlight-deferred` |
+
+Jev the model keeps its name (`typesafe/jev-*`, `isCalibratedModel`). Earlier session entries below use the old names on purpose.
+
+**Not done yet (owner):** rename the repository, ask GitHub Support to detach it from `y0usaf/pi-jev`'s fork network, bootstrap-publish `0.5.0`, add the trusted publisher, deprecate `@khaentertainment/pi-jev2`. Steps in `PUBLISHING.md`.
+
+**Migration after 0.5.0:** move `~/.pi/agent/pi-jev.json` to `greenlight.json`, rename view-limits' `.pi/pi-jev.json`, update the view-limits dogfood artifact (it quotes the old prefixes and schema), and `pi install npm:@khaentertainment/pi-greenlight` in place of `pi-jev2`.
+
+**Paused:** Cloudflare Workers AI calibration. `/login` in pi stores the Cloudflare key and account ID together, and both pi-jev2's classify path and `scripts/calibrate.ts` read it; no Enigma step is needed.
 
 ---
 

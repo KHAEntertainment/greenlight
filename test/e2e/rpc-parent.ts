@@ -1,6 +1,6 @@
 /**
- * A minimal Pi "parent": spawns `pi --mode rpc` with pi-jev in escalate mode,
- * sends one prompt, answers the child's pi-jev escalation with a scripted
+ * A minimal Pi "parent": spawns `pi --mode rpc` with greenlight in escalate mode,
+ * sends one prompt, answers the child's greenlight escalation with a scripted
  * decision, and reports what happened to the gated tool call.
  *
  *   bun test/e2e/rpc-parent.ts deny|approve|silent
@@ -18,14 +18,14 @@ import { readChildEscalation } from "../../src/escalators/pi-rpc";
 
 const decision = process.argv[2] ?? "deny";
 const repo = resolve(import.meta.dir, "../..");
-const root = mkdtempSync(join(tmpdir(), "pi-jev-e2e-"));
+const root = mkdtempSync(join(tmpdir(), "greenlight-e2e-"));
 const agentDir = join(root, "agent");
 const project = join(root, "project");
 mkdirSync(agentDir, { recursive: true });
 mkdirSync(join(project, "src"), { recursive: true });
 writeFileSync(join(project, "src", "keep.txt"), "do not delete\n");
 writeFileSync(
-	join(agentDir, "pi-jev.json"),
+	join(agentDir, "greenlight.json"),
 	JSON.stringify({ model: "fakejev/jev-fake", gate: { mode: "escalate" }, escalation: { timeoutSeconds: 5 } }),
 );
 
@@ -89,7 +89,7 @@ createInterface({ input: child.stdout }).on("line", (line) => {
 	if (event.type === "agent_end") finish("agent_end");
 });
 
-// Fallback in case no status line arrives (e.g. pi-jev inactive).
+// Fallback in case no status line arrives (e.g. greenlight inactive).
 setTimeout(() => {
 	if (!prompted) {
 		prompted = true;

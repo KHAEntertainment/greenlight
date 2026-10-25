@@ -4,7 +4,7 @@ Maintainer rules for this repository.
 
 ## Layout
 
-- This repository (`KHAEntertainment/pi-jev2`) is the canonical source for the `@khaentertainment/pi-jev2` package, a fork of `y0usaf/pi-jev`.
+- This repository (`KHAEntertainment/greenlight`, formerly `pi-jev2`) is the canonical source for the `@khaentertainment/pi-greenlight` package, a fork of `y0usaf/pi-jev`. The name changed in 0.5.0; `@khaentertainment/pi-jev2` is the deprecated old package.
 - `docs/SESSION-NOTES.md` is the running handoff log: decisions, what is verified, what is not. Read it before resuming work and append to it when you stop.
 
 ## Code
@@ -24,6 +24,7 @@ Maintainer rules for this repository.
 ## Publishing
 
 - A GitHub release publishes from `.github/workflows/publish.yml` using trusted publishing (OIDC), so the repo holds no npm token and no OTP is involved.
-- The one-time setup is done (2026-10-20): the scope exists, `0.4.0` was bootstrapped by hand, the trusted publisher is saved with npm publish allowed and dist-tag not allowed, and publishing access requires 2FA and disallows tokens. State and the release steps are in `PUBLISHING.md`.
-- Never publish by hand again or add an npm token to the repo or workflow. A release goes through a version bump, a merge, and a GitHub release.
-- The package name is scoped (`@khaentertainment/pi-jev2`) so it can sit next to the upstream `@y0usaf/pi-jev` without a name clash.
+- The one-time setup was done for `pi-jev2` (2026-10-20) and has to be repeated once for `pi-greenlight`: one bootstrap publish of `0.5.0` by the owner, then the trusted publisher and publishing access on the new package. State and the release steps are in `PUBLISHING.md`.
+- Apart from that one bootstrap, never publish by hand or add an npm token to the repo or workflow. A release goes through a version bump, a merge, and a GitHub release.
+- The package keeps the `pi-` prefix and the `pi-package` keyword so it shows in Pi's package gallery. The repository is plain `greenlight`.
+- Keep the credit line in the README: "A fork of y0usaf/pi-jev, which built the command check this is based on."

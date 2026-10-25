@@ -21,7 +21,7 @@ describe("pi-rpc", () => {
 		const decision = await escalator.request(sampleRequest(), wait());
 		expect(decision).toEqual({ decision: "deny", reason: "out of scope", by: "pi parent" });
 		expect(seen[0]?.title).toBe(RPC_ESCALATION_TITLE);
-		expect(JSON.parse(seen[0]?.placeholder ?? "{}").schema).toBe("pi-jev.escalation/v1");
+		expect(JSON.parse(seen[0]?.placeholder ?? "{}").schema).toBe("greenlight.escalation/v1");
 		expect(seen[0]?.timeout).toBeGreaterThan(0);
 	});
 
@@ -324,7 +324,7 @@ describe("a2a against a local server", () => {
 		expect(send?.headers.get("a2a-version")).toBe("1.0");
 		expect(send?.headers.get("authorization")).toBe("Bearer orch-token-123");
 		expect(send?.params.message.role).toBe("ROLE_USER");
-		expect(send?.params.message.parts[0].data.schema).toBe("pi-jev.escalation/v1");
+		expect(send?.params.message.parts[0].data.schema).toBe("greenlight.escalation/v1");
 		expect(send?.params.configuration.returnImmediately).toBe(true);
 	});
 

@@ -8,7 +8,7 @@ let root: string;
 let previous: string | undefined;
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "pi-jev-config-"));
+	root = mkdtempSync(join(tmpdir(), "greenlight-config-"));
 	previous = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = join(root, "agent");
 	mkdirSync(join(root, "agent"), { recursive: true });
@@ -22,10 +22,10 @@ afterEach(() => {
 });
 
 function writeGlobal(value: unknown) {
-	writeFileSync(join(root, "agent", "pi-jev.json"), JSON.stringify(value));
+	writeFileSync(join(root, "agent", "greenlight.json"), JSON.stringify(value));
 }
 function writeProject(value: unknown) {
-	writeFileSync(join(root, "project", ".pi", "pi-jev.json"), JSON.stringify(value));
+	writeFileSync(join(root, "project", ".pi", "greenlight.json"), JSON.stringify(value));
 }
 
 test("defaults: TypeSafe Jev, shadow, escalation auto", () => {

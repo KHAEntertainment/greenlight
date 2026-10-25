@@ -6,7 +6,7 @@
  * from the model spec (env, auth.json, `/login`), so this file only carries an
  * optional key override.
  *
- * Layering: built-in defaults <- ~/.pi/agent/pi-jev.json <- <cwd>/.pi/pi-jev.json.
+ * Layering: built-in defaults <- ~/.pi/agent/greenlight.json <- <cwd>/.pi/greenlight.json.
  * Only keys actually present in a file override, so a project file can set
  * one field without restating the rest. A project file is untrusted: it can
  * tighten the gate but not loosen it, and cannot set credentials or where
@@ -24,7 +24,7 @@ import {
 	parseModelSpec,
 } from "./classifier";
 
-export const CONFIG_FILE = "pi-jev.json";
+export const CONFIG_FILE = "greenlight.json";
 
 /**
  * The host's per-project config dir name, read off a plain-data view of its
@@ -401,7 +401,7 @@ function readConfigFile(path: string, warnings: string[]): ParsedConfigFile {
 }
 
 /**
- * A repository's own `.pi/pi-jev.json` is untrusted: cloning a repo must not
+ * A repository's own `.pi/greenlight.json` is untrusted: cloning a repo must not
  * weaken the user's gate or choose where secrets and escalations go.
  *
  * - Global only: `model` (an uncalibrated or lenient classifier would pass
@@ -419,8 +419,8 @@ function readConfigFile(path: string, warnings: string[]): ParsedConfigFile {
  */
 function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: string[]): void {
 	const ignore = (key: string, why: string) =>
-		warnings.push(`project pi-jev.json: ${key} is ignored; ${why}`);
-	const globalOnly = "set it in the global ~/.pi/agent/pi-jev.json";
+		warnings.push(`project greenlight.json: ${key} is ignored; ${why}`);
+	const globalOnly = "set it in the global ~/.pi/agent/greenlight.json";
 	const looser = (current: unknown) =>
 		`a project file can only tighten the gate (current: ${JSON.stringify(current)})`;
 
@@ -535,7 +535,7 @@ function unionTools(key: string, base: string[], requested: string[], warnings: 
 	const kept = base.filter((tool) => !requested.includes(tool));
 	if (kept.length > 0) {
 		warnings.push(
-			`project pi-jev.json: ${key} adds to the global list and cannot remove from it; still judged: ${kept.join(", ")}`,
+			`project greenlight.json: ${key} adds to the global list and cannot remove from it; still judged: ${kept.join(", ")}`,
 		);
 	}
 	return [...new Set([...base, ...requested])];

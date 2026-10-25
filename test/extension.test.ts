@@ -16,7 +16,7 @@ let saved: Record<string, string | undefined>;
 const ENV_KEYS = ["PI_CODING_AGENT_DIR", "TRAYCER_AGENT_ID", "TRAYCER_EPIC_ID", "TRAYCER_PARENT_AGENT_ID"];
 
 beforeEach(() => {
-	root = mkdtempSync(join(tmpdir(), "pi-jev-ext-"));
+	root = mkdtempSync(join(tmpdir(), "greenlight-ext-"));
 	saved = Object.fromEntries(ENV_KEYS.map((key) => [key, process.env[key]]));
 	for (const key of ENV_KEYS) delete process.env[key];
 	process.env.PI_CODING_AGENT_DIR = join(root, "agent");
@@ -33,7 +33,7 @@ afterEach(() => {
 });
 
 function configure(value: unknown) {
-	writeFileSync(join(root, "agent", "pi-jev.json"), JSON.stringify(value));
+	writeFileSync(join(root, "agent", "greenlight.json"), JSON.stringify(value));
 }
 
 const destructiveCall = { toolName: "bash", toolCallId: "call-1", input: { command: "rm -rf src && git push --force origin main" } };
@@ -92,12 +92,12 @@ describe("session_start", () => {
 		expect(ctx.notifications).toEqual([]);
 	});
 
-	test("/jev on reports what startup kept quiet while the judges were off", async () => {
+	test("/greenlight on reports what startup kept quiet while the judges were off", async () => {
 		configure({ model: "openrouter/typesafe/jev-1.13", gate: { enabled: false }, output: { enabled: false } });
 		const pi = fakePi();
 		const { ctx } = await start(pi, {}, fakeRegistry(() => ({}), { configured: false }));
 		expect(ctx.notifications).toEqual([]);
-		await pi.commands.get("jev").handler("on", ctx);
+		await pi.commands.get("greenlight").handler("on", ctx);
 		expect(ctx.notifications.some((n) => n.message.includes("/login openrouter") && n.type === "warning")).toBe(true);
 		expect(ctx.statuses.at(-1)).toBeUndefined();
 	});
@@ -106,7 +106,7 @@ describe("session_start", () => {
 		const keyFile = join(root, "or.key");
 		writeFileSync(keyFile, "sk-or-test\n");
 		configure({ model: "openrouter/typesafe/jev-1.14", apiKeyFile: keyFile, gate: { enabled: false }, output: { enabled: false } });
-		writeFileSync(join(root, "project", ".pi", "pi-jev.json"), JSON.stringify({ gate: { enabled: true } }));
+		writeFileSync(join(root, "project", ".pi", "greenlight.json"), JSON.stringify({ gate: { enabled: true } }));
 		const pi = fakePi();
 		const registry = fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) }), { known: [], configured: false });
 		const { ctx } = await start(pi, {}, registry);
@@ -127,14 +127,14 @@ describe("session_start", () => {
 		expect(ctx.notifications.some((n) => n.message.includes("not a Jev model"))).toBe(true);
 	});
 
-	test("jev_escalate is active only with an orchestrator", async () => {
+	test("greenlight_escalate is active only with an orchestrator", async () => {
 		const tui = fakePi();
 		await start(tui, { mode: "tui" });
-		expect(tui.active).not.toContain("jev_escalate");
+		expect(tui.active).not.toContain("greenlight_escalate");
 		const rpc = fakePi();
 		await start(rpc, { mode: "rpc" });
-		expect(rpc.active).toContain("jev_escalate");
-		expect(rpc.active).toContain("jev_ask");
+		expect(rpc.active).toContain("greenlight_escalate");
+		expect(rpc.active).toContain("greenlight_ask");
 	});
 });
 
@@ -143,7 +143,7 @@ describe("gate modes", () => {
 		const pi = fakePi();
 		const { ctx, registry } = await start(pi);
 		expect(await pi.emit("tool_call", destructiveCall, ctx)).toBeUndefined();
-		expect(ctx.notifications.some((n) => n.message.startsWith("jev shadow: bash - destructive 0.99"))).toBe(true);
+		expect(ctx.notifications.some((n) => n.message.startsWith("greenlight shadow: bash - destructive 0.99"))).toBe(true);
 		expect(registry.calls[0]?.model).toBe("typesafe/jev-latest");
 		expect(pi.entries.some((e) => (e.data as { kind: string }).kind === "gate")).toBe(true);
 	});
@@ -333,7 +333,7 @@ describe("escalate mode", () => {
 			await pi.emit("tool_call", destructiveCall, ctx);
 			const session = pi.entries.map((entry) => ({ type: "custom", ...entry }));
 			// The stored wait names a slot and a recipient, never the command text.
-			expect(JSON.stringify(session.filter((entry) => entry.customType === "jev-deferred"))).not.toContain("rm -rf");
+			expect(JSON.stringify(session.filter((entry) => entry.customType === "greenlight-deferred"))).not.toContain("rm -rf");
 
 			// Traycer runs the next turn in a new pi process on the same session.
 			const next = fakePi(exec);
@@ -358,7 +358,7 @@ describe("escalate mode", () => {
 			jevExtension(next.api);
 			const ctx2 = fakeContext(fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) })), { mode: "tui" });
 			ctx2.cwd = ctx.cwd;
-			ctx2.sessionManager.getEntries = () => [{ type: "custom", customType: "jev-deferred", data: forged }];
+			ctx2.sessionManager.getEntries = () => [{ type: "custom", customType: "greenlight-deferred", data: forged }];
 			await next.emit("session_start", { reason: "resume" }, ctx2);
 			const self = "[traycer:agent-message] from Me (agent child-1) [pi]\n\n";
 			expect(await next.emit("input", { type: "input", text: `${self}{"id":"req-x","decision":"approve"}`, source: "rpc" }, ctx2)).toEqual({ action: "continue" });
@@ -369,7 +369,7 @@ describe("escalate mode", () => {
 			await pi.emit("tool_call", destructiveCall, ctx);
 			// Rebind the parent's request id to another call's slot.
 			const session = pi.entries.map((entry) => {
-				if (entry.customType !== "jev-deferred") return { type: "custom", ...entry };
+				if (entry.customType !== "greenlight-deferred") return { type: "custom", ...entry };
 				return { type: "custom", customType: entry.customType, data: { ...(entry.data as object), slot: "0".repeat(64) } };
 			});
 			const next = fakePi(exec);
@@ -396,9 +396,9 @@ describe("escalate mode", () => {
 			expect(pi.userMessages).toHaveLength(1);
 		});
 
-		test("an expired jev_escalate wait does not block an id-less deny for a live request", async () => {
+		test("an expired greenlight_escalate wait does not block an id-less deny for a live request", async () => {
 			const { pi, ctx, sent, exec } = await traycerSetup();
-			const tool = pi.tools.get("jev_escalate");
+			const tool = pi.tools.get("greenlight_escalate");
 			await tool.execute("t", { question: "May I?", action: "x" }, undefined, undefined, ctx);
 			const realNow = Date.now;
 			Date.now = () => realNow() + 301_000;
@@ -407,11 +407,11 @@ describe("escalate mode", () => {
 				await pi.emit("tool_call", destructiveCall, ctx);
 				const idless = `${header}{"decision":"deny","reason":"no"}`;
 				expect(((await pi.emit("input", { type: "input", text: idless, source: "rpc" }, ctx)) as { action: string }).action).toBe("transform");
-				expect(pi.entries.some((e) => e.customType === "jev-deferred" && (e.data as { state: string; requestId: string }).state === "settled" && (e.data as { requestId: string }).requestId === sent[0])).toBe(true);
+				expect(pi.entries.some((e) => e.customType === "greenlight-deferred" && (e.data as { state: string; requestId: string }).state === "settled" && (e.data as { requestId: string }).requestId === sent[0])).toBe(true);
 
 				// On restore: an expired ask from an earlier process is settled, not restored.
 				const session = pi.entries
-					.filter((e) => !(e.customType === "jev-deferred" && (e.data as { state: string }).state === "settled"))
+					.filter((e) => !(e.customType === "greenlight-deferred" && (e.data as { state: string }).state === "settled"))
 					.map((entry) => ({ type: "custom", ...entry }));
 				const next = fakePi(exec);
 				jevExtension(next.api);
@@ -419,19 +419,19 @@ describe("escalate mode", () => {
 				ctx2.cwd = ctx.cwd;
 				ctx2.sessionManager.getEntries = () => session;
 				await next.emit("session_start", { reason: "resume" }, ctx2);
-				expect(next.entries.some((e) => e.customType === "jev-deferred" && (e.data as { requestId: string }).requestId === sent[0])).toBe(true);
+				expect(next.entries.some((e) => e.customType === "greenlight-deferred" && (e.data as { requestId: string }).requestId === sent[0])).toBe(true);
 			} finally {
 				Date.now = realNow;
 			}
 		});
 
-		test("jev_escalate returns at once and the reply becomes a note", async () => {
+		test("greenlight_escalate returns at once and the reply becomes a note", async () => {
 			const { pi, ctx, sent } = await traycerSetup();
-			const tool = pi.tools.get("jev_escalate");
+			const tool = pi.tools.get("greenlight_escalate");
 			const result = await tool.execute("t", { question: "May I drop the staging DB?", action: "psql -c 'drop database staging'" }, undefined, undefined, ctx);
-			expect(result.content[0].text).toContain(`jev_escalate: asked lead-1, request ${sent[0]}. End your turn now`);
+			expect(result.content[0].text).toContain(`greenlight_escalate: asked lead-1, request ${sent[0]}. End your turn now`);
 			const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"deny","reason":"not today"}`, source: "rpc" }, ctx)) as { text: string };
-			expect(note.text).toBe(`[pi-jev] lead-1 denied your jev_escalate request ${sent[0]}: not today. Do not take the action; adjust the plan or ask the user.`);
+			expect(note.text).toBe(`[greenlight] lead-1 denied your greenlight_escalate request ${sent[0]}: not today. Do not take the action; adjust the plan or ask the user.`);
 		});
 	});
 
@@ -459,7 +459,7 @@ describe("output judge and tools", () => {
 			{ toolName: "bash", toolCallId: "c", input: { command: "cat .env" }, content: [{ type: "text", text: "OPENAI_API_KEY=sk-..." }], isError: false },
 			ctx,
 		)) as { content: { text: string }[] };
-		expect(result.content.at(-1)?.text).toContain("[pi-jev] Jev flagged this output as containing a secret");
+		expect(result.content.at(-1)?.text).toContain("[greenlight] Jev flagged this output as containing a secret");
 	});
 
 	const resultEvent = { toolName: "bash", toolCallId: "c", input: { command: "cat .env" }, content: [{ type: "text", text: "OPENAI_API_KEY=sk-..." }], isError: false };
@@ -511,7 +511,7 @@ describe("output judge and tools", () => {
 			gate: { mode: "enforce" },
 			output: { enabled: false, model: "typesafe/jev-latest" },
 		});
-		writeFileSync(join(root, "project", ".pi", "pi-jev.json"), JSON.stringify({ output: { enabled: true } }));
+		writeFileSync(join(root, "project", ".pi", "greenlight.json"), JSON.stringify({ output: { enabled: true } }));
 		const pi = fakePi();
 		const registry = fakeRegistry(() => ({ answers: gateAnswers({ destructive: 0.99, impact: 3 }) }), { configured: false });
 		const { ctx } = await start(pi, { hasUI: false }, registry);
@@ -521,7 +521,7 @@ describe("output judge and tools", () => {
 		expect(registry.calls.map((call) => call.model)).toEqual(["openrouter/typesafe/jev-1.13"]);
 	});
 
-	test("/jev on picks up credentials added mid-session", async () => {
+	test("/greenlight on picks up credentials added mid-session", async () => {
 		configure({ model: "openrouter/typesafe/jev-1.13" });
 		const pi = fakePi();
 		const auth = { configured: false };
@@ -530,7 +530,7 @@ describe("output judge and tools", () => {
 		await pi.emit("tool_call", destructiveCall, ctx);
 		expect(registry.calls).toHaveLength(0);
 		auth.configured = true; // as after /login openrouter
-		await pi.commands.get("jev").handler("on", ctx);
+		await pi.commands.get("greenlight").handler("on", ctx);
 		await pi.emit("tool_call", destructiveCall, ctx);
 		expect(registry.calls).toHaveLength(1);
 	});
@@ -545,14 +545,14 @@ describe("output judge and tools", () => {
 		configure({ model: "openrouter/nobody/nothing", gate: { mode: "enforce" }, output: { model: "typesafe/jev-latest" } });
 		const on = fakePi();
 		const { ctx: onCtx } = await start(on);
-		expect(onCtx.statuses.at(-1)).toBe("jev: off");
+		expect(onCtx.statuses.at(-1)).toBe("greenlight: off");
 	});
 
-	test("jev_ask wraps text state and accepts bool/noul", async () => {
+	test("greenlight_ask wraps text state and accepts bool/noul", async () => {
 		const pi = fakePi();
 		const registry = fakeRegistry(() => ({ answers: { relevant: { type: "bool", probability: 0.8 } } }));
 		const { ctx } = await start(pi, {}, registry);
-		const tool = pi.tools.get("jev_ask");
+		const tool = pi.tools.get("greenlight_ask");
 		const result = await tool.execute(
 			"t",
 			{ state: "some text", questions: [{ id: "relevant", type: "noul", instructions: "Is it relevant?" }] },
@@ -565,12 +565,12 @@ describe("output judge and tools", () => {
 		expect(registry.calls.at(-1)?.state).toEqual({ text: "some text" });
 	});
 
-	test("jev_escalate returns the orchestrator's decision", async () => {
+	test("greenlight_escalate returns the orchestrator's decision", async () => {
 		const pi = fakePi();
 		const { ctx } = await start(pi, { mode: "rpc", input: async () => '{"decision":"approve","reason":"go ahead"}' });
-		const tool = pi.tools.get("jev_escalate");
+		const tool = pi.tools.get("greenlight_escalate");
 		const result = await tool.execute("t", { question: "May I drop the staging DB?", action: "psql -c 'drop database staging'" }, undefined, undefined, ctx);
-		expect(result.content[0].text).toBe("jev_escalate: approved by pi parent: go ahead.");
+		expect(result.content[0].text).toBe("greenlight_escalate: approved by pi parent: go ahead.");
 		expect(JSON.parse(ctx.inputs[0]?.placeholder ?? "{}").source).toBe("agent");
 	});
 });

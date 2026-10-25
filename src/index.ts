@@ -77,7 +77,7 @@ import {
 } from "./journal";
 
 /**
- * pi-jev - a System One classifier (TypeSafe Jev by default) as a decision
+ * greenlight - a System One classifier (TypeSafe Jev by default) as a decision
  * layer for pi. The classifier is whatever `model` names, served by whichever
  * provider pi routes it to: TypeSafe, OpenRouter, Cloudflare Workers AI,
  * Vercel AI Gateway, OpenCode, or a custom provider.
@@ -92,16 +92,16 @@ import {
  *   2. Output judge. After a tool runs, ask whether its output carries a
  *      secret and what kind of failure it reports. Never blocks; it appends a
  *      line to the tool result the model reads.
- *   3. jev_ask. A model-facing tool for decisions that should be typed and
+ *   3. greenlight_ask. A model-facing tool for decisions that should be typed and
  *      calibrated instead of written: classification, relevance, yes/no checks.
  *
  * Fails open. An API outage must never stop the agent from working, so every
  * error path returns "no verdict" instead of a block.
  */
 
-const STATUS_KEY = "jev";
-const ESCALATE_TOOL = "jev_escalate";
-/** Deferred-escalation key prefix for jev_escalate requests. */
+const STATUS_KEY = "greenlight";
+const ESCALATE_TOOL = "greenlight_escalate";
+/** Deferred-escalation key prefix for greenlight_escalate requests. */
 const AGENT_KEY = "agent:";
 /**
  * Session entries for requests still waiting on a deferred transport. Pi
@@ -109,7 +109,7 @@ const AGENT_KEY = "agent:";
  * in the next turn, so the wait has to outlive the process. Only the wait
  * is stored, never a decision: a decision is taken from the reply itself.
  */
-const DEFERRED_TYPE = "jev-deferred";
+const DEFERRED_TYPE = "greenlight-deferred";
 const DEFERRED_RESTORE_LIMIT = 50;
 
 type DeferredData =
@@ -239,8 +239,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	/**
 	 * Why the gate's model (`model`) cannot run, or undefined when it can: no
 	 * classifier runtime on this host, a model the catalog does not know, or a
-	 * provider with no credentials. Set at session_start. The gate, `/jev check`
-	 * and `jev_ask` use `model`.
+	 * provider with no credentials. Set at session_start. The gate, `/greenlight check`
+	 * and `greenlight_ask` use `model`.
 	 */
 	let inactive: string | undefined = "not started";
 	/**
@@ -258,7 +258,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	const escalations = new Map<string, Promise<EscalationOutcome | typeof UNSAFE | undefined>>();
 	/**
 	 * Escalations over a deferred transport (Traycer), by judgment key, or
-	 * `agent:<request id>` for jev_escalate. The request is sent and the call
+	 * `agent:<request id>` for greenlight_escalate. The request is sent and the call
 	 * blocked; the decision comes with a later prompt and is kept for one
 	 * retry of that exact call.
 	 */
@@ -267,7 +267,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	/** Decision notes pi queued during a run, until they start a user message. */
 	const queuedNotes = new Set<string>();
 	/**
-	 * `/jev last` and `/jev output` read these; they are journal records rather
+	 * `/greenlight last` and `/greenlight output` read these; they are journal records rather
 	 * than live verdicts so a rehydrated session renders the same text as a live
 	 * one. `journal` holds the records written this session (or reloaded from it).
 	 */
@@ -323,7 +323,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	/**
 	 * Notices about the classifier: why the judges cannot run, or what they run
 	 * on. Silent while both judges are off (a global install switched on per
-	 * project), and repeated by `/jev on`, so a notice skipped at startup still
+	 * project), and repeated by `/greenlight on`, so a notice skipped at startup still
 	 * shows once something can classify. `warnOnce` keeps it to one each.
 	 */
 	function announce(ctx: ExtensionContext): void {
@@ -333,7 +333,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		if (outputOn && outputInactive) blocked.set(outputInactive, [...(blocked.get(outputInactive) ?? []), "output judge"]);
 		for (const [reason, judges] of blocked) {
 			const who = judges.length === 2 ? "the judges are" : `the ${judges[0]} is`;
-			warnOnce(ctx, reason, `pi-jev: ${reason}; ${who} inactive until then.`);
+			warnOnce(ctx, reason, `greenlight: ${reason}; ${who} inactive until then.`);
 		}
 		const registry = registryOf(ctx);
 		const inUse = new Set([
@@ -345,7 +345,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				warnOnce(
 					ctx,
 					`built-in:${spec}`,
-					`pi-jev: ${spec} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
+					`greenlight: ${spec} is missing from pi's model catalog; using greenlight's built-in definition for it.`,
 					"info",
 				);
 			}
@@ -354,14 +354,14 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			warnOnce(
 				ctx,
 				`uncalibrated:${config.model}`,
-				`pi-jev: ${config.model} is not a Jev model; the thresholds were measured on Jev, so it may flag too much or too little. Run \`npm run calibrate -- --model ${config.model}\` before relying on ${mode}.`,
+				`greenlight: ${config.model} is not a Jev model; the thresholds were measured on Jev, so it may flag too much or too little. Run \`npm run calibrate -- --model ${config.model}\` before relying on ${mode}.`,
 			);
 		}
 		if (gateOn && !inactive && mode === "escalate" && !escalatorFor(ctx)) {
 			warnOnce(
 				ctx,
 				"no-transport",
-				"pi-jev: escalate mode has no orchestrator here (no Traycer env, no escalation.a2a.url, not in RPC mode); flagged calls use the enforce rule.",
+				"greenlight: escalate mode has no orchestrator here (no Traycer env, no escalation.a2a.url, not in RPC mode); flagged calls use the enforce rule.",
 			);
 		}
 	}
@@ -413,7 +413,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		const gate = gateOn && !inactive;
 		const output = outputOn && !outputInactive;
 		if (!gate && !output) return undefined;
-		return `jev: ${gate ? mode : "off"}${output ? "" : " (out off)"}`;
+		return `greenlight: ${gate ? mode : "off"}${output ? "" : " (out off)"}`;
 	}
 
 	/** One classifier request with this session's timeout and key, on `model` (the gate's by default). */
@@ -472,7 +472,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	/** jev_escalate is declared to the model only when an orchestrator exists. */
+	/** greenlight_escalate is declared to the model only when an orchestrator exists. */
 	function syncEscalateTool(ctx: ExtensionContext): void {
 		try {
 			const active = pi.getActiveTools();
@@ -494,7 +494,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		last = newestRecord(journal, "gate");
 		lastOutput = newestRecord(journal, "output");
 		for (const warning of loaded.warnings) {
-			ctx.ui.notify(`pi-jev: ${redact(warning)}`, "warning");
+			ctx.ui.notify(`greenlight: ${redact(warning)}`, "warning");
 		}
 		refreshReady(ctx);
 		syncEscalateTool(ctx);
@@ -541,17 +541,17 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		ctx.ui.setStatus(
 			STATUS_KEY,
 			verdict.flagged
-				? `jev: ${summarizeVerdict(verdict)}`
-				: `jev: clear (${mode})`,
+				? `greenlight: ${summarizeVerdict(verdict)}`
+				: `greenlight: clear (${mode})`,
 		);
 		if (!verdict.flagged) return;
 		// A clear call is not journaled: the flag is the record worth keeping.
 		remember(last);
 
-		const reason = `pi-jev: ${summarizeVerdict(verdict)}`;
+		const reason = `greenlight: ${summarizeVerdict(verdict)}`;
 		if (mode === "shadow") {
 			ctx.ui.notify(
-				`jev shadow: ${event.toolName} - ${summarizeVerdict(verdict)}`,
+				`greenlight shadow: ${event.toolName} - ${summarizeVerdict(verdict)}`,
 				"warning",
 			);
 			return;
@@ -571,7 +571,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			if (outcome) {
 				if (outcome.decision === "approve") {
 					ctx.ui.notify(
-						`jev: ${event.toolName} ${describeOutcome(outcome)}`,
+						`greenlight: ${event.toolName} ${describeOutcome(outcome)}`,
 						"info",
 					);
 					return;
@@ -596,7 +596,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			// No UI means no way to approve a flagged call. Degrade to shadow
 			// rather than deadlocking a headless run on a classifier's opinion.
 			ctx.ui.notify(
-				`jev: ${toolName} - ${summarizeVerdict(verdict)} (headless: not blocking; set gate.blockWithoutUI to block)`,
+				`greenlight: ${toolName} - ${summarizeVerdict(verdict)} (headless: not blocking; set gate.blockWithoutUI to block)`,
 				"warning",
 			);
 			return undefined;
@@ -653,7 +653,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			deferred.delete(slot);
 			if (now <= entry.deadline) {
 				if (entry.outcome.decision === "approve") {
-					ctx.ui.notify(`jev: ${event.toolName} ${describeOutcome(entry.outcome)}`, "info");
+					ctx.ui.notify(`greenlight: ${event.toolName} ${describeOutcome(entry.outcome)}`, "info");
 					return undefined;
 				}
 				return { block: true, reason: `${reason} (${describeOutcome(entry.outcome)})` };
@@ -711,7 +711,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		const scrubbed = scrubSecrets({ ...request, id: boundRequestId(slot, nonce) }, redact);
 		if (scrubbed.unsafe) {
 			remember(escalationRecord(toolName, { fallback: UNSAFE_REASON, transport, latencyMs: 0 }, Date.now()));
-			ctx.ui.notify(`jev: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
+			ctx.ui.notify(`greenlight: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
 			return UNSAFE;
 		}
 		if (scrubbed.redacted) scrubbed.value.redacted = true;
@@ -732,7 +732,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			};
 			trackDeferred(entry);
 			persistDeferred(entry);
-			ctx.ui.setStatus(STATUS_KEY, `jev: waiting on ${transport}`);
+			ctx.ui.setStatus(STATUS_KEY, `greenlight: waiting on ${transport}`);
 			return entry;
 		} catch (error) {
 			const message = redact(error instanceof Error ? error.message : String(error));
@@ -824,7 +824,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 		for (const data of [...waiting.values()].slice(-DEFERRED_RESTORE_LIMIT)) {
 			if (data.to !== parent || deferred.has(data.slot)) continue;
-			// No retry ever settles a jev_escalate wait, so an expired one would linger.
+			// No retry ever settles a greenlight_escalate wait, so an expired one would linger.
 			if (data.toolName === ESCALATE_TOOL && Date.now() >= data.deadline) {
 				writeDeferred({ state: "settled", requestId: data.requestId });
 				continue;
@@ -834,8 +834,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * Drop jev_escalate waits past their deadline. A gate wait is settled by
-	 * the retry that finds it expired; nothing retries a jev_escalate, and a
+	 * Drop greenlight_escalate waits past their deadline. A gate wait is settled by
+	 * the retry that finds it expired; nothing retries a greenlight_escalate, and a
 	 * stale wait would count as pending, so an id-less reply to a live
 	 * request would see two candidates and be refused.
 	 */
@@ -856,18 +856,18 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		const why = match.decision.reason ? `: ${match.decision.reason}` : "";
 		if (entry?.toolName === ESCALATE_TOOL) {
 			if (decision === "escalate") {
-				return `[pi-jev] ${by} passed your jev_escalate request ${match.requestId} to a human. End your turn and wait; the decision comes as a later message.`;
+				return `[greenlight] ${by} passed your greenlight_escalate request ${match.requestId} to a human. End your turn and wait; the decision comes as a later message.`;
 			}
-			return `[pi-jev] ${by} ${decision === "approve" ? "approved" : "denied"} your jev_escalate request ${match.requestId}${why}.${decision === "deny" ? " Do not take the action; adjust the plan or ask the user." : ""}`;
+			return `[greenlight] ${by} ${decision === "approve" ? "approved" : "denied"} your greenlight_escalate request ${match.requestId}${why}.${decision === "deny" ? " Do not take the action; adjust the plan or ask the user." : ""}`;
 		}
 		const call = entry ? `the flagged \`${entry.toolName}\` call` : `escalation ${match.requestId}`;
 		if (decision === "escalate") {
-			return `[pi-jev] ${by} passed ${call} to a human. End your turn and wait; the decision comes as a later message.`;
+			return `[greenlight] ${by} passed ${call} to a human. End your turn and wait; the decision comes as a later message.`;
 		}
 		if (decision === "approve") {
-			return `[pi-jev] ${by} approved ${call}${why}. Retry that exact call now; a changed call needs a new decision.`;
+			return `[greenlight] ${by} approved ${call}${why}. Retry that exact call now; a changed call needs a new decision.`;
 		}
-		return `[pi-jev] ${by} denied ${call}${why}. Do not retry it; adjust the plan or ask the user.`;
+		return `[greenlight] ${by} denied ${call}${why}. Do not retry it; adjust the plan or ask the user.`;
 	}
 
 	/**
@@ -895,18 +895,18 @@ export default function jevExtension(pi: ExtensionAPI): void {
 					Date.now(),
 				),
 			);
-			ctx.ui.notify(`jev: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
+			ctx.ui.notify(`greenlight: ${toolName} not escalated: ${UNSAFE_REASON}`, "warning");
 			return UNSAFE;
 		}
 		if (scrubbed.redacted) scrubbed.value.redacted = true;
-		ctx.ui.setStatus(STATUS_KEY, `jev: waiting on ${escalator.name}`);
+		ctx.ui.setStatus(STATUS_KEY, `greenlight: waiting on ${escalator.name}`);
 		try {
 			const outcome = await escalate(escalator, scrubbed.value, config.escalation, {
 				signal,
 				onEscalated: () => {
-					ctx.ui.setStatus(STATUS_KEY, `jev: ${escalator.name} escalated to a human`);
+					ctx.ui.setStatus(STATUS_KEY, `greenlight: ${escalator.name} escalated to a human`);
 					ctx.ui.notify(
-						`jev: ${toolName} escalated to a human by the orchestrator; waiting`,
+						`greenlight: ${toolName} escalated to a human by the orchestrator; waiting`,
 						"info",
 					);
 				},
@@ -978,10 +978,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 
 		lastOutput = outputRecord(event.toolName, verdict, Date.now());
 		remember(lastOutput);
-		ctx.ui.setStatus(STATUS_KEY, `jev: ${verdict.kind} (${event.toolName})`);
+		ctx.ui.setStatus(STATUS_KEY, `greenlight: ${verdict.kind} (${event.toolName})`);
 		if (verdict.kind === "leak") {
 			ctx.ui.notify(
-				`jev: ${event.toolName} output may carry a secret (${verdict.leaksSecret.toFixed(2)})`,
+				`greenlight: ${event.toolName} output may carry a secret (${verdict.leaksSecret.toFixed(2)})`,
 				"warning",
 			);
 		}
@@ -989,7 +989,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		return {
 			content: [
 				...event.content,
-				{ type: "text" as const, text: `[pi-jev] ${verdict.notice}` },
+				{ type: "text" as const, text: `[greenlight] ${verdict.notice}` },
 			],
 			structuredContent: event.structuredContent,
 		};
@@ -1103,7 +1103,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		if (at - lastErrorAt < ERROR_NOTIFY_INTERVAL_MS) return;
 		lastErrorAt = at;
 		ctx.ui.notify(
-			`pi-jev: ${redact(error instanceof Error ? error.message : String(error))} (failing open)`,
+			`greenlight: ${redact(error instanceof Error ? error.message : String(error))} (failing open)`,
 			"error",
 		);
 	}
@@ -1121,9 +1121,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	pi.registerCommand("jev", {
+	pi.registerCommand("greenlight", {
 		description:
-			"pi-jev: status, mode shadow|enforce|escalate, on/off, last verdict, last judged output, journal log, check",
+			"greenlight: status, mode shadow|enforce|escalate, on/off, last verdict, last judged output, journal log, check",
 		handler: async (args, ctx) => {
 			const [sub, value] = args.trim().toLowerCase().split(/\s+/);
 			if (sub === "on" || sub === "off") {
@@ -1132,14 +1132,14 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				outputOn = on;
 				if (on) refreshReady(ctx);
 				ctx.ui.setStatus(STATUS_KEY, statusText());
-				ctx.ui.notify(`pi-jev: gate ${sub}`, "info");
+				ctx.ui.notify(`greenlight: gate ${sub}`, "info");
 				if (on) announce(ctx);
 				return;
 			}
 			if (sub === "mode") {
 				if (!GATE_MODES.includes(value as GateMode)) {
 					ctx.ui.notify(
-						`pi-jev: mode is ${mode} (usage: /jev mode ${GATE_MODES.join("|")})`,
+						`greenlight: mode is ${mode} (usage: /greenlight mode ${GATE_MODES.join("|")})`,
 						"warning",
 					);
 					return;
@@ -1152,29 +1152,29 @@ export default function jevExtension(pi: ExtensionAPI): void {
 						: mode === "enforce"
 							? "asks before running flagged calls"
 							: `asks the orchestrator (${escalatorFor(ctx)?.name ?? "none found: enforce rule"})`;
-				ctx.ui.notify(`pi-jev: ${mode} (${detail})`, "info");
+				ctx.ui.notify(`greenlight: ${mode} (${detail})`, "info");
 				return;
 			}
 			if (sub === "last") {
 				if (last?.kind !== "gate") {
-					ctx.ui.notify("pi-jev: no verdicts yet", "info");
+					ctx.ui.notify("greenlight: no verdicts yet", "info");
 					return;
 				}
-				ctx.ui.notify(`pi-jev: ${describeRecord(last)}`, "info");
+				ctx.ui.notify(`greenlight: ${describeRecord(last)}`, "info");
 				return;
 			}
 			if (sub === "output") {
 				if (lastOutput?.kind !== "output") {
-					ctx.ui.notify("pi-jev: no tool output judged yet", "info");
+					ctx.ui.notify("greenlight: no tool output judged yet", "info");
 					return;
 				}
-				ctx.ui.notify(`pi-jev output: ${describeRecord(lastOutput)}`, "info");
+				ctx.ui.notify(`greenlight output: ${describeRecord(lastOutput)}`, "info");
 				return;
 			}
 			if (sub === "log") {
 				if (journal.length === 0) {
 					ctx.ui.notify(
-						"pi-jev: journal is empty (nothing flagged yet)",
+						"greenlight: journal is empty (nothing flagged yet)",
 						"info",
 					);
 					return;
@@ -1185,7 +1185,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 						`${recordClock(record)} ${record.kind} ${describeRecord(record)}`,
 				);
 				ctx.ui.notify(
-					`pi-jev log: ${shown.length} of ${journal.length} kept (cap ${JOURNAL_CAP})\n${lines.join("\n")}`,
+					`greenlight log: ${shown.length} of ${journal.length} kept (cap ${JOURNAL_CAP})\n${lines.join("\n")}`,
 					"info",
 				);
 				return;
@@ -1193,12 +1193,12 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			if (sub === "check") {
 				const text = args.trim().slice("check".length).trim();
 				if (!text) {
-					ctx.ui.notify("pi-jev: usage /jev check <text>", "warning");
+					ctx.ui.notify("greenlight: usage /greenlight check <text>", "warning");
 					return;
 				}
 				const why = checkReady(ctx);
 				if (why) {
-					ctx.ui.notify(`pi-jev: ${why}`, "warning");
+					ctx.ui.notify(`greenlight: ${why}`, "warning");
 					return;
 				}
 				try {
@@ -1208,12 +1208,12 @@ export default function jevExtension(pi: ExtensionAPI): void {
 					// not journaled: the journal is the record of what actually fired.
 					last = gateRecord("check", verdict, Date.now());
 					ctx.ui.notify(
-						`pi-jev check: ${summarizeVerdict(verdict)} | ${describeAnswers(response)}`,
+						`greenlight check: ${summarizeVerdict(verdict)} | ${describeAnswers(response)}`,
 						"info",
 					);
 				} catch (error) {
 					ctx.ui.notify(
-						`pi-jev: ${redact(error instanceof Error ? error.message : String(error))}`,
+						`greenlight: ${redact(error instanceof Error ? error.message : String(error))}`,
 						"error",
 					);
 				}
@@ -1231,7 +1231,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				env: process.env,
 			});
 			ctx.ui.notify(
-				`pi-jev: ${inactive ? `inactive (${inactive})` : gateOn ? "on" : "off"}, out ${outputInactive ? `inactive (${outputInactive})` : outputOn ? "on" : "off"}, mode ${mode}, model ${config.model}${isCalibratedModel(config.model) ? "" : " (uncalibrated)"}${outputModel() === config.model ? "" : `, out model ${outputModel()}`}, auth ${auth}, escalation ${transport}, judging ${config.gate.tools.join("/")}, out tools ${config.output.tools.join("/")}, cache ${cache.size}/${outputCache.size}, journal ${journal.length}`,
+				`greenlight: ${inactive ? `inactive (${inactive})` : gateOn ? "on" : "off"}, out ${outputInactive ? `inactive (${outputInactive})` : outputOn ? "on" : "off"}, mode ${mode}, model ${config.model}${isCalibratedModel(config.model) ? "" : " (uncalibrated)"}${outputModel() === config.model ? "" : `, out model ${outputModel()}`}, auth ${auth}, escalation ${transport}, judging ${config.gate.tools.join("/")}, out tools ${config.output.tools.join("/")}, cache ${cache.size}/${outputCache.size}, journal ${journal.length}`,
 				"info",
 			);
 		},
@@ -1245,8 +1245,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		promptSnippet:
 			"Ask your orchestrator to approve or deny an action before you take it",
 		promptGuidelines: [
-			"Use jev_escalate when an action needs a decision from whoever is managing you (scope changes, irreversible operations, conflicting instructions), not for questions you can answer yourself.",
-			"If jev_escalate returns a denial, do not take the action; adjust the plan or ask the user.",
+			"Use greenlight_escalate when an action needs a decision from whoever is managing you (scope changes, irreversible operations, conflicting instructions), not for questions you can answer yourself.",
+			"If greenlight_escalate returns a denial, do not take the action; adjust the plan or ask the user.",
 		],
 		parameters: EscalateParams,
 		defaultActive: false,
@@ -1255,7 +1255,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			if (!escalator) {
 				return {
 					content: [
-						{ type: "text" as const, text: "jev_escalate: no orchestrator is reachable from this session; ask the user instead." },
+						{ type: "text" as const, text: "greenlight_escalate: no orchestrator is reachable from this session; ask the user instead." },
 					],
 					details: { ok: false },
 				};
@@ -1287,7 +1287,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 							? `asked ${sent.to}, request ${sent.requestId}. End your turn now and wait: the decision arrives as your next message. Do not take the action unless it is approved.`
 							: "no decision: the orchestrator could not be reached. Ask the user before taking the action.";
 				return {
-					content: [{ type: "text" as const, text: `jev_escalate: ${text}` }],
+					content: [{ type: "text" as const, text: `greenlight_escalate: ${text}` }],
 					details: { ok: sent !== undefined && sent !== UNSAFE, pending: sent && sent !== UNSAFE ? sent.requestId : undefined },
 				};
 			}
@@ -1300,29 +1300,29 @@ export default function jevExtension(pi: ExtensionAPI): void {
 						? `${describeOutcome(outcome)}.`
 						: "no decision: the orchestrator did not answer in time. Ask the user before taking the action.";
 			return {
-				content: [{ type: "text" as const, text: `jev_escalate: ${text}` }],
+				content: [{ type: "text" as const, text: `greenlight_escalate: ${text}` }],
 				details: { ok: outcome !== undefined, outcome },
 			};
 		},
 	});
 
 	pi.registerTool({
-		name: "jev_ask",
+		name: "greenlight_ask",
 		label: "Jev Ask",
 		description:
 			"Ask a System One classifier (TypeSafe Jev by default) typed questions about a piece of text and get calibrated answers (probabilities, a chosen option, a rubric score) instead of prose.",
 		promptSnippet:
 			"Ask Jev typed questions (yes/no, choice, rubric) about text and get calibrated answers",
 		promptGuidelines: [
-			"Use jev_ask when a judgement must be typed and calibrated rather than written: classification, relevance, yes/no checks, rubric scores.",
-			"Ask one specific question per entry in jev_ask; split multi-factor judgements into separate questions and combine the answers yourself.",
+			"Use greenlight_ask when a judgement must be typed and calibrated rather than written: classification, relevance, yes/no checks, rubric scores.",
+			"Ask one specific question per entry in greenlight_ask; split multi-factor judgements into separate questions and combine the answers yourself.",
 		],
 		parameters: AskParams,
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
 			const why = checkReady(ctx);
 			if (why) {
 				return {
-					content: [{ type: "text" as const, text: `jev_ask: ${why}` }],
+					content: [{ type: "text" as const, text: `greenlight_ask: ${why}` }],
 					details: { ok: false },
 				};
 			}
@@ -1332,7 +1332,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				if (typeof built === "string") {
 					return {
 						content: [
-							{ type: "text" as const, text: `jev_ask: ${built}` },
+							{ type: "text" as const, text: `greenlight_ask: ${built}` },
 						],
 						details: { ok: false },
 					};
@@ -1361,7 +1361,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 					content: [
 						{
 							type: "text" as const,
-							text: `jev_ask: ${redact(error instanceof Error ? error.message : String(error))}`,
+							text: `greenlight_ask: ${redact(error instanceof Error ? error.message : String(error))}`,
 						},
 					],
 					details: { ok: false },

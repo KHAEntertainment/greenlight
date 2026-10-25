@@ -1,5 +1,5 @@
 /**
- * The real pi binary, in RPC mode, with pi-jev in escalate mode and a parent
+ * The real pi binary, in RPC mode, with greenlight in escalate mode and a parent
  * process answering over the extension UI subprotocol. Slow-ish (a pi
  * process per case), so each case gets a generous timeout.
  */
@@ -31,7 +31,7 @@ describe("pi --mode rpc escalation", () => {
 	test("parent approve lets the call run", () => {
 		const report = run("approve");
 		expect(report.end).toBe("agent_end");
-		expect(report.toolResult.text).not.toContain("pi-jev:");
+		expect(report.toolResult.text).not.toContain("greenlight:");
 		expect(report.toolResult.text).toContain("not a git repository");
 	}, 45_000);
 
