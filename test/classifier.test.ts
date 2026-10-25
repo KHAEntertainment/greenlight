@@ -80,16 +80,29 @@ describe("classify", () => {
 		expect(usesBuiltInDefinition(registry, "openrouter/typesafe/jev-1.13")).toBe(false);
 	});
 
-	test.each(["openrouter/typesafe/jev-1.13", "openrouter/typesafe/jev-1.14", "openrouter/~typesafe/jev-latest"])(
+	test.each([
+		"openrouter/typesafe/jev-1.13",
+		"openrouter/typesafe/jev-1.14",
+		"openrouter/~typesafe/jev-latest",
+		"openrouter/inception/mercury-decide",
+		"openrouter/inception/mercury-decide:free",
+	])(
 		"%s has a built-in definition",
 		(spec) => {
 			expect(resolveModel(fakeRegistry(() => ({}), { known: [] }), spec)?.type).toBe("classifier");
 		},
 	);
 
-	test("only known Jev models have built-in definitions", () => {
+	test("only known models have built-in definitions", () => {
 		const registry = fakeRegistry(() => ({}), { known: [] });
-		for (const spec of ["openrouter/typesafe/jev-9.99", "openrouter/openai/gpt-6", "vercel-ai-gateway/typesafe-ai/jev-1.14.0", "typesafe/jev-latest"]) {
+		for (const spec of [
+			"openrouter/typesafe/jev-9.99",
+			"openrouter/openai/gpt-6",
+			"vercel-ai-gateway/typesafe-ai/jev-1.14.0",
+			"typesafe/jev-latest",
+			"inception/mercury-decide",
+			"openrouter/mercury-decide",
+		]) {
 			expect(resolveModel(registry, spec)).toBeUndefined();
 		}
 	});

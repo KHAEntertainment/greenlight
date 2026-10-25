@@ -100,6 +100,12 @@ export interface OutputConfig {
 	leakThreshold: number;
 	/** Minimum confidence on the failure class before advice is attached. */
 	minConfidence: number;
+	/**
+	 * Classifier for this judge, as `provider/id`; unset means the top-level
+	 * `model`. Global file only, like `model`. `apiKey`/`apiKeyFile` go with
+	 * `model` and are used here only when both are on the same provider.
+	 */
+	model?: string;
 }
 
 export interface TraycerConfig {
@@ -378,6 +384,8 @@ function readConfigFile(path: string, warnings: string[]): ParsedConfigFile {
 		if (leakThreshold !== undefined) parsedOutput.leakThreshold = leakThreshold;
 		const minConfidence = asRatio(Reflect.get(output, "minConfidence"));
 		if (minConfidence !== undefined) parsedOutput.minConfidence = minConfidence;
+		const model = asString(Reflect.get(output, "model"));
+		if (model) parsedOutput.model = model;
 		out.output = parsedOutput;
 	}
 
@@ -461,6 +469,10 @@ function restrictProject(base: JevConfig, project: ParsedConfigFile, warnings: s
 
 	const output = project.output;
 	if (output) {
+		if (output.model !== undefined) {
+			delete output.model;
+			ignore("output.model", globalOnly);
+		}
 		if (output.enabled === false && base.output.enabled) {
 			delete output.enabled;
 			ignore("output.enabled", looser(true));

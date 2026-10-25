@@ -237,11 +237,18 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	let outputOn = config.output.enabled;
 	let mode: GateMode = config.gate.mode;
 	/**
-	 * Why the judges are inactive, or undefined when they can run: no
+	 * Why the gate's model (`model`) cannot run, or undefined when it can: no
 	 * classifier runtime on this host, a model the catalog does not know, or a
-	 * provider with no credentials. Set at session_start.
+	 * provider with no credentials. Set at session_start. The gate, `/jev check`
+	 * and `jev_ask` use `model`.
 	 */
 	let inactive: string | undefined = "not started";
+	/**
+	 * The same for the output judge's model. Kept apart so a broken
+	 * `output.model` stops only the output judge: a project file may turn that
+	 * judge on, and must not be able to switch the gate off by doing so.
+	 */
+	let outputInactive: string | undefined = "not started";
 
 	const cache = new Map<string, { at: number; verdict: GateVerdict }>();
 	const inflight = new Map<string, Promise<GateVerdict | undefined>>();
@@ -321,27 +328,36 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	 */
 	function announce(ctx: ExtensionContext): void {
 		if (!gateOn && !outputOn) return;
-		if (inactive) {
-			warnOnce(ctx, inactive, `pi-jev: ${inactive}; the judges are inactive until then.`);
-			return;
+		const blocked = new Map<string, string[]>();
+		if (gateOn && inactive) blocked.set(inactive, ["gate"]);
+		if (outputOn && outputInactive) blocked.set(outputInactive, [...(blocked.get(outputInactive) ?? []), "output judge"]);
+		for (const [reason, judges] of blocked) {
+			const who = judges.length === 2 ? "the judges are" : `the ${judges[0]} is`;
+			warnOnce(ctx, reason, `pi-jev: ${reason}; ${who} inactive until then.`);
 		}
 		const registry = registryOf(ctx);
-		if (registry && usesBuiltInDefinition(registry, config.model)) {
-			warnOnce(
-				ctx,
-				`built-in:${config.model}`,
-				`pi-jev: ${config.model} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
-				"info",
-			);
+		const inUse = new Set([
+			...(gateOn && !inactive ? [config.model] : []),
+			...(outputOn && !outputInactive ? [outputModel()] : []),
+		]);
+		for (const spec of inUse) {
+			if (registry && usesBuiltInDefinition(registry, spec)) {
+				warnOnce(
+					ctx,
+					`built-in:${spec}`,
+					`pi-jev: ${spec} is missing from pi's model catalog; using pi-jev's built-in definition for it.`,
+					"info",
+				);
+			}
 		}
-		if (gateOn && mode !== "shadow" && !isCalibratedModel(config.model)) {
+		if (gateOn && !inactive && mode !== "shadow" && !isCalibratedModel(config.model)) {
 			warnOnce(
 				ctx,
 				`uncalibrated:${config.model}`,
 				`pi-jev: ${config.model} is not a Jev model; the thresholds were measured on Jev, so it may flag too much or too little. Run \`npm run calibrate -- --model ${config.model}\` before relying on ${mode}.`,
 			);
 		}
-		if (gateOn && mode === "escalate" && !escalatorFor(ctx)) {
+		if (gateOn && !inactive && mode === "escalate" && !escalatorFor(ctx)) {
 			warnOnce(
 				ctx,
 				"no-transport",
@@ -350,17 +366,17 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		}
 	}
 
-	/** Why the judges cannot run with this host and config, or undefined. */
-	function checkReady(ctx: ExtensionContext): string | undefined {
+	/** Why `spec` (the gate's `model` by default) cannot run, or undefined. */
+	function checkReady(ctx: ExtensionContext, spec: string = config.model): string | undefined {
 		const registry = registryOf(ctx);
 		if (!registry) {
 			return "this host has no classifier runtime (pi 0.99 or later is required)";
 		}
-		if (!resolveModel(registry, config.model)) {
-			return `classifier ${config.model} is not in the model catalog (check the provider/id spelling, or add it in models.json)`;
+		if (!resolveModel(registry, spec)) {
+			return `classifier ${spec} is not in the model catalog (check the provider/id spelling, or add it in models.json)`;
 		}
-		if (config.apiKey) return undefined;
-		const { provider } = parseModelSpec(config.model);
+		if (keyFor(spec)) return undefined;
+		const { provider } = parseModelSpec(spec);
 		const status = registry.getProviderAuthStatus?.(provider);
 		if (status && !status.configured) {
 			return `no credentials for ${provider}: ${authHint(provider)}`;
@@ -368,26 +384,55 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		return undefined;
 	}
 
-	function statusText(): string {
-		return `jev: ${gateOn ? mode : "off"}${outputOn ? "" : " (out off)"}`;
+	/** Readiness of both judges' models. Credentials can change mid-session (`/login`). */
+	function refreshReady(ctx: ExtensionContext): void {
+		inactive = checkReady(ctx);
+		outputInactive = outputModel() === config.model ? inactive : checkReady(ctx, outputModel());
 	}
 
-	/** One classifier request with this session's model, timeout, and key override. */
+	/** The output judge's classifier: `output.model`, else the gate's `model`. */
+	function outputModel(): string {
+		return config.output.model ?? config.model;
+	}
+
+	/**
+	 * `apiKey` belongs to `model`'s provider. Another provider never gets it:
+	 * it would send that provider a credential issued by someone else.
+	 */
+	function keyFor(spec: string): string | undefined {
+		if (!config.apiKey) return undefined;
+		return parseModelSpec(spec).provider === parseModelSpec(config.model).provider ? config.apiKey : undefined;
+	}
+
+	/**
+	 * The footer status, naming what actually runs: a judge that is on but
+	 * cannot reach its model counts as off. Undefined (no status) when neither
+	 * judge can classify, rather than a mode that does nothing.
+	 */
+	function statusText(): string | undefined {
+		const gate = gateOn && !inactive;
+		const output = outputOn && !outputInactive;
+		if (!gate && !output) return undefined;
+		return `jev: ${gate ? mode : "off"}${output ? "" : " (out off)"}`;
+	}
+
+	/** One classifier request with this session's timeout and key, on `model` (the gate's by default). */
 	async function ask(
 		ctx: ExtensionContext,
 		state: JevState,
 		questions: Record<string, JevQuestion>,
 		signal: AbortSignal | undefined,
+		model: string = config.model,
 	): Promise<JevResponse> {
 		const registry = registryOf(ctx);
 		if (!registry) throw new JevError("no classifier runtime on this host");
 		return classify(registry, {
 			state,
 			questions,
-			model: config.model,
+			model,
 			timeoutMs: config.timeoutMs,
 			retries: config.retries,
-			apiKey: config.apiKey,
+			apiKey: keyFor(model),
 			signal,
 		});
 	}
@@ -451,10 +496,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		for (const warning of loaded.warnings) {
 			ctx.ui.notify(`pi-jev: ${redact(warning)}`, "warning");
 		}
-		inactive = checkReady(ctx);
+		refreshReady(ctx);
 		syncEscalateTool(ctx);
 		announce(ctx);
-		ctx.ui.setStatus(STATUS_KEY, inactive ? undefined : statusText());
+		ctx.ui.setStatus(STATUS_KEY, statusText());
 	});
 
 	// A decision on a pending escalation is the gate's: the gate records it,
@@ -913,7 +958,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	}
 
 	pi.on("tool_result", async (event, ctx) => {
-		if (!outputOn || inactive) return;
+		if (!outputOn || outputInactive) return;
 		if (!config.output.tools.includes(event.toolName)) return;
 		if (event.parentToolCallId) return;
 		const text = contentText(event.content);
@@ -995,6 +1040,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				}),
 				OUTPUT_QUESTIONS,
 				ctx.signal,
+				outputModel(),
 			);
 			return evaluateOutput(response, config);
 		} catch (error) {
@@ -1084,7 +1130,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				const on = sub === "on";
 				gateOn = on;
 				outputOn = on;
-				ctx.ui.setStatus(STATUS_KEY, inactive ? undefined : on ? `jev: ${mode}` : "jev: off");
+				if (on) refreshReady(ctx);
+				ctx.ui.setStatus(STATUS_KEY, statusText());
 				ctx.ui.notify(`pi-jev: gate ${sub}`, "info");
 				if (on) announce(ctx);
 				return;
@@ -1184,7 +1231,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 				env: process.env,
 			});
 			ctx.ui.notify(
-				`pi-jev: ${inactive ? `inactive (${inactive})` : gateOn ? "on" : "off"}, out ${outputOn ? "on" : "off"}, mode ${mode}, model ${config.model}${isCalibratedModel(config.model) ? "" : " (uncalibrated)"}, auth ${auth}, escalation ${transport}, judging ${config.gate.tools.join("/")}, out tools ${config.output.tools.join("/")}, cache ${cache.size}/${outputCache.size}, journal ${journal.length}`,
+				`pi-jev: ${inactive ? `inactive (${inactive})` : gateOn ? "on" : "off"}, out ${outputInactive ? `inactive (${outputInactive})` : outputOn ? "on" : "off"}, mode ${mode}, model ${config.model}${isCalibratedModel(config.model) ? "" : " (uncalibrated)"}${outputModel() === config.model ? "" : `, out model ${outputModel()}`}, auth ${auth}, escalation ${transport}, judging ${config.gate.tools.join("/")}, out tools ${config.output.tools.join("/")}, cache ${cache.size}/${outputCache.size}, journal ${journal.length}`,
 				"info",
 			);
 		},

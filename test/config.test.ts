@@ -143,6 +143,15 @@ test("a project file cannot pick the model or set a key override", () => {
 	for (const key of ["model", "apiKeyFile", "apiKey"]) expect(text).toContain(`${key} is ignored`);
 });
 
+test("output.model is read from the global file and ignored in a project file", () => {
+	writeGlobal({ model: "openrouter/typesafe/jev-1.14", output: { model: "openrouter/inception/mercury-decide" } });
+	expect(loadJevConfig(join(root, "project")).config.output.model).toBe("openrouter/inception/mercury-decide");
+	writeProject({ output: { model: "openrouter/some/lenient-model" } });
+	const { config, warnings } = loadJevConfig(join(root, "project"));
+	expect(config.output.model).toBe("openrouter/inception/mercury-decide");
+	expect(warnings.join("\n")).toContain("output.model is ignored");
+});
+
 test("the output judge and verdict cache are tighten-only too", () => {
 	writeProject({
 		gate: { cacheSeconds: 99999 },
