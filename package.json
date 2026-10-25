@@ -1,6 +1,6 @@
 {
   "name": "@khaentertainment/pi-jev2",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "System One classifiers (TypeSafe Jev and others, via TypeSafe, OpenRouter, Cloudflare and more) as a decision layer for Pi: judges mutating tool calls before they run, reads tool output for secrets and failure class after, escalates flagged calls to an orchestrator (Pi parent, Traycer, A2A), and exposes jev_ask for typed calibrated answers",
   "homepage": "https://github.com/KHAEntertainment/pi-jev2",
   "repository": {
