@@ -5,15 +5,15 @@
 The package moves from `@khaentertainment/pi-jev2` to
 `@khaentertainment/pi-greenlight`, and the repository from
 `KHAEntertainment/pi-jev2` to `KHAEntertainment/greenlight`. `0.5.0` is the
-first version under the new name. The old package keeps `0.4.0` to `0.4.4` and
-is deprecated with a pointer to the new one.
+first version under the new name. The old package keeps `0.4.0` to `0.4.4`; the
+owner will deprecate it with a pointer to the new one (last row below).
 
 | Step | State |
 |---|---|
 | `@khaentertainment` scope | Exists: an npm organization owned by `bbrenner2217`. |
 | Repository rename | TODO (owner): `KHAEntertainment/pi-jev2` -> `KHAEntertainment/greenlight`, before any workflow publish, because the OIDC token names the repository. |
 | Bootstrap publish | TODO (owner): publish `0.5.0` by hand from `main` with passkey 2FA (`npm publish --access public`). npm cannot attach a trusted publisher to a package that does not exist yet. |
-| Trusted publisher | TODO (owner): on the new package's settings page, user `KHAEntertainment`, repository `greenlight`, workflow `publish.yml`, environment empty. **Allow npm publish** on, **allow npm dist-tag** off. |
+| Trusted publisher | TODO (owner): on the new package's settings page, user `KHAEntertainment`, repository `greenlight`, workflow `publish.yml`, environment empty. **Allow npm publish** on, **allow npm dist-tag** off. A new trusted publisher expires unless its first successful workflow publish happens within 2 days, so cut the next release (`0.5.1`) from the workflow within 2 days of saving it. The preflight's OIDC exchange is not a publish. An expired one cannot be used or edited: delete it and add it again before releasing. |
 | Publishing access | TODO (owner): "Require two-factor authentication and disallow tokens". |
 | Old package | TODO (owner): `npm deprecate @khaentertainment/pi-jev2 "Renamed to @khaentertainment/pi-greenlight"`. |
 

@@ -27,7 +27,7 @@ Jev the model keeps its name (`typesafe/jev-*`, `isCalibratedModel`). Earlier se
 
 **Not done yet (owner):** rename the repository, ask GitHub Support to detach it from `y0usaf/pi-jev`'s fork network, bootstrap-publish `0.5.0`, add the trusted publisher, deprecate `@khaentertainment/pi-jev2`. Steps in `PUBLISHING.md`.
 
-**Migration after 0.5.0:** move `~/.pi/agent/pi-jev.json` to `greenlight.json`, rename view-limits' `.pi/pi-jev.json`, update the view-limits dogfood artifact (it quotes the old prefixes and schema), and `pi install npm:@khaentertainment/pi-greenlight` in place of `pi-jev2`.
+**Migration after 0.5.0:** move `~/.pi/agent/pi-jev.json` to `greenlight.json`, rename view-limits' `.pi/pi-jev.json`, update the view-limits dogfood artifact (it quotes the old prefixes and schema), then `pi remove npm:@khaentertainment/pi-jev2` and `pi install npm:@khaentertainment/pi-greenlight`. Installing the new package does not remove the old one, and with both installed pi loads both extensions.
 
 **Paused:** Cloudflare Workers AI calibration. `/login` in pi stores the Cloudflare key and account ID together, and both pi-jev2's classify path and `scripts/calibrate.ts` read it; no Enigma step is needed.
 
