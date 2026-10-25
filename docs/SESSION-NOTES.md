@@ -25,9 +25,7 @@ where to pick up. Append a new entry when you stop.
 
 Jev the model keeps its name (`typesafe/jev-*`, `isCalibratedModel`). Earlier session entries below use the old names on purpose.
 
-**Not done yet (owner):** rename the repository, ask GitHub Support to detach it from `y0usaf/pi-jev`'s fork network, bootstrap-publish `0.5.0`, add the trusted publisher, deprecate `@khaentertainment/pi-jev2`. Steps in `PUBLISHING.md`.
-
-**Migration after 0.5.0:** move `~/.pi/agent/pi-jev.json` to `greenlight.json`, rename view-limits' `.pi/pi-jev.json`, update the view-limits dogfood artifact (it quotes the old prefixes and schema), then `pi remove npm:@khaentertainment/pi-jev2` and `pi install npm:@khaentertainment/pi-greenlight`. Installing the new package does not remove the old one, and with both installed pi loads both extensions.
+**Done, 2026-10-25:** the repository is `KHAEntertainment/greenlight` and no longer in `y0usaf/pi-jev`'s fork network. `0.5.0` was bootstrapped by hand; `0.5.1` is the first workflow release, staged and then approved by the owner (`npm stage approve`). `@khaentertainment/pi-jev2` is deprecated. On the owner's machine pi loads `npm:@khaentertainment/pi-greenlight@0.5.1` (old package removed) and the global config is `~/.pi/agent/greenlight.json`. view-limits renamed its file to `.pi/greenlight.json` (view-limits#107); a probe in a fresh checkout showed `/greenlight` registered and the status `greenlight: escalate`. The view-limits dogfood artifact uses the new names.
 
 **Paused:** Cloudflare Workers AI calibration. `/login` in pi stores the Cloudflare key and account ID together, and both pi-jev2's classify path and `scripts/calibrate.ts` read it; no Enigma step is needed.
 
