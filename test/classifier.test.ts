@@ -35,8 +35,17 @@ describe("isCalibratedModel", () => {
 		"cloudflare-workers-ai/typesafe/jev",
 		"vercel-ai-gateway/typesafe-ai/jev",
 		"opencode/jev-1.13-free",
-	])("%s is Jev", (spec) => expect(isCalibratedModel(spec)).toBe(true));
-	test.each(["cloudflare-workers-ai/@cf/cloudflare/clef", "openrouter/jaredpalmer/kev-4b", "openrouter/upstage/solar-decide"])(
+		"openrouter/cloudflare/clef-flash",
+	])("%s is calibrated", (spec) => expect(isCalibratedModel(spec)).toBe(true));
+	test.each([
+		"cloudflare-workers-ai/@cf/cloudflare/clef",
+		"cloudflare-workers-ai/@cf/cloudflare/clef-flash",
+		"openrouter/cloudflare/clef",
+		"openrouter/cloudflare/clef-omni",
+		"openrouter/inception/mercury-decide",
+		"openrouter/jaredpalmer/kev-4b",
+		"openrouter/upstage/solar-decide",
+	])(
 		"%s is not",
 		(spec) => expect(isCalibratedModel(spec)).toBe(false),
 	);
@@ -86,6 +95,9 @@ describe("classify", () => {
 		"openrouter/~typesafe/jev-latest",
 		"openrouter/inception/mercury-decide",
 		"openrouter/inception/mercury-decide:free",
+		"openrouter/cloudflare/clef",
+		"openrouter/cloudflare/clef-flash",
+		"openrouter/cloudflare/clef-omni",
 	])(
 		"%s has a built-in definition",
 		(spec) => {
