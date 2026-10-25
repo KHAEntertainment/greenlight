@@ -370,6 +370,8 @@ So Mercury Decide is supported as `output.model`, and Jev stays on the gate.
 
 Cloudflare's System One models, measured 2026-10-24 through OpenRouter (`openrouter/cloudflare/*`), 3 runs per fixture, 42 requests each, 0 failures. The Workers AI route (`cloudflare-workers-ai/@cf/cloudflare/*`) is not measured yet, so it still counts as uncalibrated.
 
+A score shown as a range (`0.61-0.63`) spans the three runs, and a single number means all three matched. Failure classes are listed once per distinct result, so `transient (conf 0.96); transient (conf 0.93)` means two runs agreed on one value and the third gave the other. A single class means all three runs returned it.
+
 **Clef Flash** (`cloudflare/clef-flash`, $0.038 per million input tokens):
 
 | State | destructive | exfiltration | beyond_scope | impact | Verdict | Expected |
