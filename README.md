@@ -1,4 +1,4 @@
-# Greenlight
+[![greenlight](https://ascii.rest/banner/greenlight.svg?color=07f236,3f8862&font=bold&shadow=heavy&fill=block&size=l)](https://ascii.rest/banner/)
 
 **When your coding agent tries something risky, it asks its boss first.**
 
