@@ -156,6 +156,9 @@ export const BUILT_IN_CLASSIFIERS: readonly ClassifierModel<ClassifierApi>[] = [
 	openRouterJev("~typesafe/jev-latest", "TypeSafe: Jev Latest"),
 	openRouterSystemOne("inception/mercury-decide", "Inception: Mercury Decide", 0.02, 65536),
 	openRouterSystemOne("inception/mercury-decide:free", "Inception: Mercury Decide (free)", 0, 65536),
+	openRouterSystemOne("cloudflare/clef", "Cloudflare: Clef", 0.24, 65536),
+	openRouterSystemOne("cloudflare/clef-flash", "Cloudflare: Clef Flash", 0.038, 24576),
+	openRouterSystemOne("cloudflare/clef-omni", "Cloudflare: Clef Omni", 0.15, 65536),
 ];
 
 function builtInClassifier(
@@ -181,13 +184,17 @@ export function usesBuiltInDefinition(registry: ClassifierRegistry, spec: string
 }
 
 /**
- * Jev models are what the thresholds in docs/REFERENCE.md `## Calibration` were measured
- * on. Any other System One model may sit on a different scale, so callers warn
- * before letting it block anything.
+ * Gate models whose rows in docs/REFERENCE.md `## Calibration` show the
+ * default thresholds working: Jev on any route, and Clef Flash through
+ * OpenRouter (measured 2026-10-24). Clef Flash on Workers AI is a different
+ * route that has not been measured. Any other System One model may sit on a
+ * different scale, so callers warn before letting it block anything.
  */
+const CALIBRATED_ELSEWHERE = new Set(["openrouter/cloudflare/clef-flash"]);
+
 export function isCalibratedModel(spec: string): boolean {
-	const { id } = parseModelSpec(spec);
-	return /(^|\/|~)jev([-.]|$)/.test(id);
+	const parsed = parseModelSpec(spec);
+	return /(^|\/|~)jev([-.]|$)/.test(parsed.id) || CALIBRATED_ELSEWHERE.has(formatModelSpec(parsed));
 }
 
 /**
