@@ -23,7 +23,7 @@ Maintainer rules for this repository.
 
 ## Publishing
 
-- A GitHub release publishes from `.github/workflows/publish.yml` using trusted publishing (OIDC), so the repo holds no npm token and no OTP is involved.
+- A GitHub release stages the package from `.github/workflows/publish.yml` using trusted publishing (OIDC), so the repo holds no npm token. The trusted publisher allows staging only; the owner approves each staged version with 2FA (`npm stage approve`).
 - The one-time setup was done for `pi-jev2` (2026-10-20) and has to be repeated once for `pi-greenlight`: one bootstrap publish of `0.5.0` by the owner, then the trusted publisher and publishing access on the new package. State and the release steps are in `PUBLISHING.md`.
 - Apart from that one bootstrap, never publish by hand or add an npm token to the repo or workflow. A release goes through a version bump, a merge, and a GitHub release.
 - The package keeps the `pi-` prefix and the `pi-package` keyword so it shows in Pi's package gallery. The repository is plain `greenlight`.
