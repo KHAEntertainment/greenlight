@@ -1,5 +1,5 @@
 /**
- * Calibrate pi-jev's thresholds for a classifier.
+ * Calibrate greenlight's thresholds for a classifier.
  *
  * AGENTS.md: a threshold change belongs with a measurement. This runs the
  * docs/REFERENCE.md `## Calibration` fixtures through the extension's own state builders
@@ -13,7 +13,7 @@
  *
  * Credentials come from pi's own store: provider env vars, ~/.pi/agent/auth.json
  * (so `/login openrouter` works), and models.json; `--api-key-file` overrides
- * them, as `apiKeyFile` does in pi-jev.json. Nothing is sent but the fixtures
+ * them, as `apiKeyFile` does in greenlight.json. Nothing is sent but the fixtures
  * below. A failed request is counted and skipped, not fatal, and the run ends
  * with request latency and token use.
  */

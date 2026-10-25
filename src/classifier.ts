@@ -377,7 +377,7 @@ export function redact(text: string): string {
 export function authHint(provider: string): string {
 	switch (provider) {
 		case "typesafe":
-			return "set TYPESAFE_API_KEY, run /login typesafe, or set apiKeyFile in pi-jev.json";
+			return "set TYPESAFE_API_KEY, run /login typesafe, or set apiKeyFile in greenlight.json";
 		case "openrouter":
 			return "run /login openrouter (OAuth) or set OPENROUTER_API_KEY";
 		case "cloudflare-workers-ai":

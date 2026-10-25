@@ -16,13 +16,13 @@
 
 import type { EscalationConfig, EscalationTransport } from "./config";
 
-export const ESCALATION_SCHEMA = "pi-jev.escalation/v1";
+export const ESCALATION_SCHEMA = "greenlight.escalation/v1";
 
 /** What the orchestrator is asked to decide. Arguments are already elided. */
 export interface EscalationRequest {
 	schema: typeof ESCALATION_SCHEMA;
 	id: string;
-	/** "gate" for a flagged call, "agent" for a jev_escalate tool call. */
+	/** "gate" for a flagged call, "agent" for a greenlight_escalate tool call. */
 	source: "gate" | "agent";
 	tool: string;
 	arguments: unknown;
@@ -32,7 +32,7 @@ export interface EscalationRequest {
 		scores: Record<string, number | undefined>;
 		model: string;
 	};
-	/** Free text the agent attached (jev_escalate), or the user's last request. */
+	/** Free text the agent attached (greenlight_escalate), or the user's last request. */
 	question?: string;
 	userRequest?: string;
 	/**
@@ -434,7 +434,7 @@ function scrub(value: unknown, known: (text: string) => string, state: ScrubStat
 
 export function newRequestId(): string {
 	const random = globalThis.crypto?.randomUUID?.();
-	return random ?? `jev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+	return random ?? `greenlight-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 /** One line for the block reason and notifications. */

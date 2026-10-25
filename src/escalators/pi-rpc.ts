@@ -8,8 +8,8 @@
  * request travels as `input`:
  *
  *   child -> {"type":"extension_ui_request","id":"…","method":"input",
- *             "title":"pi-jev escalation",
- *             "placeholder":"{\"schema\":\"pi-jev.escalation/v1\",…}",
+ *             "title":"greenlight escalation",
+ *             "placeholder":"{\"schema\":\"greenlight.escalation/v1\",…}",
  *             "timeout":300000}
  *   parent -> {"type":"extension_ui_response","id":"…",
  *              "value":"{\"decision\":\"deny\",\"reason\":\"…\",\"by\":\"parent\"}"}
@@ -33,7 +33,7 @@ import {
 	type Escalator,
 } from "../escalation";
 
-export const RPC_ESCALATION_TITLE = "pi-jev escalation";
+export const RPC_ESCALATION_TITLE = "greenlight escalation";
 
 export interface InputDialog {
 	input(
@@ -99,7 +99,7 @@ export interface RelayContext {
 	signal?: AbortSignal;
 }
 
-/** Whether a child's UI request is a pi-jev escalation, and its payload. */
+/** Whether a child's UI request is a greenlight escalation, and its payload. */
 export function readChildEscalation(
 	line: ChildUiRequest,
 ): EscalationRequest | undefined {

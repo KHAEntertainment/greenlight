@@ -1,4 +1,4 @@
-# pi-jev2
+# Greenlight
 
 **When your coding agent tries something risky, it asks its boss first.**
 
@@ -12,9 +12,9 @@ That works when you're at the keyboard. More and more, you aren't. Agents run un
 
 ## The solution
 
-pi-jev2 sends the decision up the chain of command.
+Greenlight sends the decision up the chain of command.
 
-When a command looks risky, pi-jev2 pauses it and asks the agent's orchestrator: approve, deny, or ask a human. The orchestrator knows the plan, so it can tell a planned cleanup from a mistake. If it doesn't answer in time, you're asked instead, the same as in pi-jev.
+When a command looks risky, Greenlight pauses it and asks the agent's orchestrator: approve, deny, or ask a human. The orchestrator knows the plan, so it can tell a planned cleanup from a mistake. If it doesn't answer in time, you're asked instead, the same as in pi-jev.
 
 It works with:
 
@@ -25,7 +25,7 @@ It works with:
 
 More ADEs, such as Orca and Xirp, will be tested and verified in future releases.
 
-pi-jev2 also lets you reach Jev through the provider you already use: TypeSafe, OpenRouter, Cloudflare, Vercel, or OpenCode.
+Greenlight also lets you reach Jev through the provider you already use: TypeSafe, OpenRouter, Cloudflare, Vercel, or OpenCode.
 
 Everything pi-jev does is still here. It checks risky commands in about a third of a second, warns when a command prints a password, and never blocks your agent if the check itself fails.
 
@@ -34,26 +34,26 @@ Everything pi-jev does is still here. It checks risky commands in about a third 
 1. Install it:
 
    ```bash
-   pi install npm:@khaentertainment/pi-jev2
+   pi install npm:@khaentertainment/pi-greenlight
    ```
 
 2. Give it a key. Run `/login typesafe` in Pi, or set `TYPESAFE_API_KEY`.
 
-3. Keep working as usual. pi-jev2 starts by only warning you, so nothing gets blocked. Run `/jev log` to see what it caught.
+3. Keep working as usual. Greenlight starts by only warning you, so nothing gets blocked. Run `/greenlight log` to see what it caught.
 
 4. Running agents under Traycer or another orchestrator? Hand the decisions up the chain:
 
    ```
-   /jev mode escalate
+   /greenlight mode escalate
    ```
 
-   Working alone? Use `/jev mode enforce` to be asked before risky commands run.
+   Working alone? Use `/greenlight mode enforce` to be asked before risky commands run.
 
-**[Install pi-jev2 now](https://www.npmjs.com/package/@khaentertainment/pi-jev2)**, and give your agents a boss to answer to.
+**[Install Greenlight now](https://www.npmjs.com/package/@khaentertainment/pi-greenlight)**, and give your agents a boss to answer to.
 
 ## Want the details?
 
-Orchestrator setup, providers, settings, and the measurements behind every threshold are in the [reference guide](https://github.com/KHAEntertainment/pi-jev2/blob/main/docs/REFERENCE.md).
+Orchestrator setup, providers, settings, and the measurements behind every threshold are in the [reference guide](https://github.com/KHAEntertainment/greenlight/blob/main/docs/REFERENCE.md).
 
 ---
 

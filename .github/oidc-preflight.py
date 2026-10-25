@@ -21,7 +21,7 @@ AUDIENCE = "npm:registry.npmjs.org"
 # Mirrors lib/utils/oidc.js in the npm CLI: the GitHub OIDC token is presented
 # as the Authorization bearer to the per-package exchange endpoint.
 EXCHANGE = "https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/{}"
-PACKAGE = "@khaentertainment/pi-jev2"
+PACKAGE = "@khaentertainment/pi-greenlight"
 # A JWT (the GitHub OIDC token) or an npm token, wherever it sits in a reply.
 TOKEN_SHAPES = re.compile(r"eyJ[\w-]+\.[\w-]+\.[\w-]+|npm_[A-Za-z0-9]{20,}")
 

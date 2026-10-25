@@ -258,7 +258,7 @@ function jsonRpcUrl(card: unknown): string | undefined {
 
 function summaryText(req: EscalationRequest): string {
 	const what = req.verdict
-		? `pi-jev flagged a ${req.tool} call (${req.verdict.summary})`
+		? `greenlight flagged a ${req.tool} call (${req.verdict.summary})`
 		: `an agent asks for a decision before ${req.tool}: ${req.question ?? ""}`;
 	return `${what}. The agent is paused until this task completes. Complete with {"decision":"approve"|"deny","reason":"..."}, reject the task to deny, or set input-required while a human decides.`;
 }

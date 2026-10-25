@@ -188,7 +188,7 @@ export function summarizeVerdict(verdict: GateVerdict): string {
 	return verdict.reasons.join(", ");
 }
 
-/** One-line answer dump, for /jev last and the model-facing tool. */
+/** One-line answer dump, for /greenlight last and the model-facing tool. */
 export function describeAnswers(
 	response: Pick<JevResponse, "answers">,
 	questions: Record<string, JevQuestion> = GATE_QUESTIONS,

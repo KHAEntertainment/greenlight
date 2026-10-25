@@ -324,10 +324,10 @@ export function traycerEscalator(exec: Exec, options: TraycerOptions): Escalator
 /** Written for an LLM manager: what is asked, and the exact reply shape. */
 export function traycerMessage(req: EscalationRequest, self: string): string {
 	const what = req.verdict
-		? `the pi-jev safety gate flagged a \`${req.tool}\` call (${req.verdict.summary}).`
+		? `the greenlight safety gate flagged a \`${req.tool}\` call (${req.verdict.summary}).`
 		: `it asks for a decision before \`${req.tool}\`: ${req.question ?? "(no question given)"}`;
 	return [
-		`[pi-jev escalation] Agent ${self} is paused: ${what}`,
+		`[greenlight escalation] Agent ${self} is paused: ${what}`,
 		"It will not continue until you reply to this message.",
 		`Reply on this thread with JSON: {"id":"${req.id}","decision":"approve"|"deny"|"escalate","reason":"<one line>"}.`,
 		'Use "escalate" if a human should decide; then send the final approve/deny when they have.',

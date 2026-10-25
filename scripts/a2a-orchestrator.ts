@@ -3,7 +3,7 @@
  *
  *   bun scripts/a2a-orchestrator.ts [--port 9911] [--token secret]
  *
- * Then point pi-jev at it:
+ * Then point greenlight at it:
  *
  *   { "gate": { "mode": "escalate" },
  *     "escalation": { "transport": "a2a", "a2a": { "url": "http://127.0.0.1:9911" } } }
@@ -71,8 +71,8 @@ const server = Bun.serve({
 		const url = new URL(request.url);
 		if (url.pathname === "/.well-known/agent-card.json") {
 			return Response.json({
-				name: "pi-jev test orchestrator",
-				description: "Approves or denies pi-jev escalations from a terminal",
+				name: "greenlight test orchestrator",
+				description: "Approves or denies greenlight escalations from a terminal",
 				version: "0.1.0",
 				supportedInterfaces: [{ url: `http://127.0.0.1:${port}/rpc`, protocolBinding: "JSONRPC", protocolVersion: "1.0" }],
 				capabilities: { streaming: false, pushNotifications: false },

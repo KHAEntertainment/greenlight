@@ -1,15 +1,16 @@
 {
-  "name": "@khaentertainment/pi-jev2",
-  "version": "0.4.4",
-  "description": "System One classifiers (TypeSafe Jev and others, via TypeSafe, OpenRouter, Cloudflare and more) as a decision layer for Pi: judges mutating tool calls before they run, reads tool output for secrets and failure class after, escalates flagged calls to an orchestrator (Pi parent, Traycer, A2A), and exposes jev_ask for typed calibrated answers",
-  "homepage": "https://github.com/KHAEntertainment/pi-jev2",
+  "name": "@khaentertainment/pi-greenlight",
+  "version": "0.5.0",
+  "description": "Greenlight: System One classifiers (TypeSafe Jev and others, via TypeSafe, OpenRouter, Cloudflare and more) as a decision layer for Pi: judges mutating tool calls before they run, reads tool output for secrets and failure class after, escalates flagged calls to an orchestrator (Pi parent, Traycer, A2A), and exposes greenlight_ask for typed calibrated answers",
+  "homepage": "https://github.com/KHAEntertainment/greenlight",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/KHAEntertainment/pi-jev2.git"
+    "url": "git+https://github.com/KHAEntertainment/greenlight.git"
   },
   "keywords": [
     "pi-package",
     "pi-extension",
+    "greenlight",
     "typesafe",
     "jev",
     "system-one",
@@ -49,7 +50,7 @@
     "access": "public"
   },
   "bugs": {
-    "url": "https://github.com/KHAEntertainment/pi-jev2/issues"
+    "url": "https://github.com/KHAEntertainment/greenlight/issues"
   },
   "author": "KHAEntertainment (fork of y0usaf/pi-jev)",
   "scripts": {
