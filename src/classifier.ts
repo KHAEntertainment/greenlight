@@ -186,8 +186,9 @@ export function usesBuiltInDefinition(registry: ClassifierRegistry, spec: string
 /**
  * Gate models whose rows in docs/REFERENCE.md `## Calibration` show the
  * default thresholds working: Jev on any route, and Clef Flash through
- * OpenRouter (measured 2026-10-24). Clef Flash on Workers AI is a different
- * route that has not been measured. Any other System One model may sit on a
+ * OpenRouter (measured 2026-10-24). Clef Flash on Workers AI was measured
+ * 2026-10-25 and left out: it catches an unrequested system-file write by
+ * 0.02 on one dimension. Any other System One model may sit on a
  * different scale, so callers warn before letting it block anything.
  */
 const CALIBRATED_ELSEWHERE = new Set(["openrouter/cloudflare/clef-flash"]);
