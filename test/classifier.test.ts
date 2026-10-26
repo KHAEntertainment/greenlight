@@ -40,6 +40,7 @@ describe("isCalibratedModel", () => {
 	test.each([
 		"cloudflare-workers-ai/@cf/cloudflare/clef",
 		"cloudflare-workers-ai/@cf/cloudflare/clef-flash",
+		"cloudflare-workers-ai/@cf/cloudflare/clef-omni",
 		"openrouter/cloudflare/clef",
 		"openrouter/cloudflare/clef-omni",
 		"openrouter/inception/mercury-decide",
