@@ -1,6 +1,16 @@
 [![greenlight](https://ascii.rest/banner/greenlight.svg?color=07f236,3f8862&font=bold&shadow=heavy&fill=block&size=l)](https://ascii.rest/banner/)
 
+<div align="center">
+
+### The go-ahead from whoever's in charge
+
 **When your coding agent tries something risky, it asks its boss first.**
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/KHAEntertainment/greenlight?utm_source=oss&utm_medium=github&utm_campaign=KHAEntertainment%2Fgreenlight&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit)](https://coderabbit.ai)
+
+[Try it](#try-it-in-two-minutes) | [The problem](#the-problem) | [The solution](#the-solution) | [Full reference](docs/REFERENCE.md)
+
+</div>
 
 ## The problem
 
@@ -23,9 +33,9 @@ It works with:
 - **Any orchestrator that speaks [A2A](https://a2a-protocol.org)**, the open agent-to-agent protocol.
 - **You**, if you're working one-on-one with an agent.
 
-More ADEs, such as Orca and Xirp, will be tested and verified in future releases.
+Orca and Xirp are next.
 
-Greenlight also lets you reach Jev through the provider you already use: TypeSafe, OpenRouter, Cloudflare, Vercel, or OpenCode.
+Greenlight also lets you reach Jev through the provider you already use: TypeSafe, OpenRouter, Cloudflare, Vercel, or OpenCode. Jev is the default, not the only option: Mercury Decide can run the output check, and Clef Flash through OpenRouter is calibrated for the gate with the same thresholds. The [calibration data](docs/REFERENCE.md#calibration) covers all three.
 
 Everything pi-jev does is still here. It checks risky commands in about a third of a second, warns when a command prints a password, and never blocks your agent if the check itself fails.
 
@@ -43,7 +53,7 @@ Everything pi-jev does is still here. It checks risky commands in about a third 
 
 4. Running agents under Traycer or another orchestrator? Hand the decisions up the chain:
 
-   ```
+   ```text
    /greenlight mode escalate
    ```
 
