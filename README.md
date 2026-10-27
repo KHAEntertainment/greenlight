@@ -33,7 +33,7 @@ It works with:
 - **Any orchestrator that speaks [A2A](https://a2a-protocol.org)**, the open agent-to-agent protocol.
 - **You**, if you're working one-on-one with an agent.
 
-Orca and Xirp are next.
+Orca and Xirp, two more ADEs, are next.
 
 Greenlight also lets you reach Jev through the provider you already use: TypeSafe, OpenRouter, Cloudflare, Vercel, or OpenCode. Jev is the default, not the only option: Mercury Decide can run the output check, and Clef Flash through OpenRouter is calibrated for the gate with the same thresholds. The [calibration data](docs/REFERENCE.md#calibration) covers all three.
 
