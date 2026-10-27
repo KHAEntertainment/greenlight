@@ -907,7 +907,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			text = `${fence}\n${JSON.stringify(input)}\n${fence}`;
 		}
 		if (text.length > APPROVED_QUOTE_LIMIT) return undefined;
-		return redact(text);
+		// A quote is only useful if it is exact. One carrying a remembered
+		// credential would come back masked and miss the slot, so none is given.
+		if (redact(text) !== text) return undefined;
+		return text;
 	}
 
 	/**

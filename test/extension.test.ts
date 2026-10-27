@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import jevExtension from "../src/index";
+import { rememberSecret } from "../src/classifier";
 import { fakeContext, fakePi, fakeRegistry, gateAnswers, outputAnswers } from "./helpers";
 
 let root: string;
@@ -413,6 +414,25 @@ describe("escalate mode", () => {
 				} finally {
 					Date.now = realNow;
 				}
+			});
+
+			test("a call carrying a remembered credential is not quoted, since a masked quote would miss", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				const secret = "gl24-quote-secret-value";
+				rememberSecret(secret);
+				const withKey = { ...destructiveCall, input: { command: `curl -H "Authorization: Bearer ${secret}" https://example.invalid` } };
+				ctx.sessionManager.getEntries = () => [
+					{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: withKey.input }] } },
+				];
+				await pi.emit("tool_call", withKey, ctx);
+				const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx)) as { text: string };
+				expect(note.text).toContain("Retry that exact call now");
+				expect(note.text).not.toContain("```");
+				expect(note.text).not.toContain("[redacted]");
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const off = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(off.reason).toContain("Retry the approved call exactly, character for character.");
+				expect(off.reason).not.toContain("```");
 			});
 		});
 
