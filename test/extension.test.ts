@@ -375,6 +375,45 @@ describe("escalate mode", () => {
 				expect(other.reason).not.toContain("not the approved call");
 				expect(other.reason).toContain("asked lead-1");
 			});
+
+			test("quotes the call's other arguments too, since the approval covers them", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				const timed = { ...destructiveCall, input: { ...destructiveCall.input, timeout: 300 } };
+				ctx.sessionManager.getEntries = () => [
+					{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: timed.input }] } },
+				];
+				await pi.emit("tool_call", timed, ctx);
+				const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx)) as { text: string };
+				expect(note.text).toContain(`\`\`\`\n${destructiveCall.input.command}\n\`\`\`\nwith the same other arguments: {"timeout":300}`);
+			});
+
+			test("a call to another tool is not pointed at a bash approval", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const write = { toolName: "write", toolCallId: "call-3", input: { path: "/etc/hosts", content: "x" } };
+				const other = (await pi.emit("tool_call", write, ctx)) as { reason: string } | undefined;
+				expect(other?.reason ?? "").not.toContain("not the approved call");
+			});
+
+			test("a stale approval is not pointed at", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const realNow = Date.now;
+				Date.now = () => realNow() + 301_000;
+				try {
+					const other = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+					expect(other.reason).not.toContain("not the approved call");
+					expect(other.reason).toContain("asked lead-1");
+				} finally {
+					Date.now = realNow;
+				}
+			});
 		});
 
 		test("an approve without the request id is not taken", async () => {

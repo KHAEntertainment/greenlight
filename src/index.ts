@@ -894,11 +894,20 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			return undefined;
 		}
 		if (input === undefined) return undefined;
+		// The slot covers the whole input, so every field is quoted: a bash
+		// command in its own block, any other field (a timeout) after it.
 		const command = typeof input === "object" && input !== null ? Reflect.get(input, "command") : undefined;
-		const text = typeof command === "string" ? command : JSON.stringify(input);
-		if (text.length > APPROVED_QUOTE_LIMIT) return undefined;
 		const fence = "```";
-		return `${fence}\n${redact(text)}\n${fence}`;
+		let text: string;
+		if (typeof command === "string") {
+			const rest = Object.fromEntries(Object.entries(input as object).filter(([key]) => key !== "command"));
+			const others = Object.keys(rest).length > 0 ? `\nwith the same other arguments: ${JSON.stringify(rest)}` : "";
+			text = `${fence}\n${command}\n${fence}${others}`;
+		} else {
+			text = `${fence}\n${JSON.stringify(input)}\n${fence}`;
+		}
+		if (text.length > APPROVED_QUOTE_LIMIT) return undefined;
+		return redact(text);
 	}
 
 	/**
