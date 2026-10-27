@@ -111,6 +111,8 @@ const AGENT_KEY = "agent:";
  */
 const DEFERRED_TYPE = "greenlight-deferred";
 const DEFERRED_RESTORE_LIMIT = 50;
+/** Longest approved call quoted back to the agent; past this it is described, not quoted. */
+const APPROVED_QUOTE_LIMIT = 2000;
 
 type DeferredData =
 	| { state: "pending"; requestId: string; slot: string; nonce: string; toolName: string; to: string; sentAt: number; deadline: number; viaHuman: boolean }
@@ -164,6 +166,8 @@ interface Deferred {
 	deadline: number;
 	viaHuman: boolean;
 	outcome?: EscalationOutcome;
+	/** Set once a different call has been told this approval is not for it. */
+	mismatchNoted?: boolean;
 	cancel(): void;
 }
 const ERROR_NOTIFY_INTERVAL_MS = 60_000;
@@ -504,10 +508,10 @@ export default function jevExtension(pi: ExtensionAPI): void {
 
 	// A decision on a pending escalation is the gate's: the gate records it,
 	// and the model reads a note saying what to do, never the raw reply.
-	pi.on("input", (event) => {
+	pi.on("input", (event, ctx) => {
 		const match = traycerReplies.offer(event.text);
 		if (!match) return { action: "continue" };
-		const note = replyNote(match);
+		const note = replyNote(match, ctx);
 		if (event.streamingBehavior) queuedNotes.add(note);
 		return { action: "transform", text: note };
 	});
@@ -676,6 +680,14 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			ctx.ui.setStatus(STATUS_KEY, statusText());
 			return localDecision(event.toolName, verdict, reason, ctx);
 		}
+		// An approval for another input of this tool is usually a retry that
+		// drifted (a changed `| tail -N`): say so once, with the call to repeat,
+		// rather than open a request the parent cannot tell from the first.
+		const approved = approvedElsewhere(event.toolName, slot, now);
+		if (approved) {
+			approved.mismatchNoted = true;
+			return { block: true, reason: `${reason} (${mismatchText(approved, ctx)})` };
+		}
 		let inflight = deferredSends.get(key);
 		if (!inflight) {
 			inflight = sendDeferred(gateRequest(event, verdict, ctx), event.toolName, key, send, transport, ctx).finally(() =>
@@ -834,6 +846,62 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	}
 
 	/**
+	 * An unused approval, still in time, for a different input of the same
+	 * tool, that has not yet been pointed out to the agent.
+	 */
+	function approvedElsewhere(toolName: string, slot: string, now: number): Deferred | undefined {
+		for (const entry of deferred.values()) {
+			if (entry.slot === slot || entry.toolName !== toolName || entry.mismatchNoted) continue;
+			if (entry.outcome?.decision === "approve" && now <= entry.deadline) return entry;
+		}
+		return undefined;
+	}
+
+	function mismatchText(entry: Deferred, ctx: ExtensionContext): string {
+		const by = entry.outcome?.by ?? entry.to;
+		const quoted = approvedCallText(entry, ctx);
+		const repeat = quoted
+			? `Retry the approved call exactly, character for character:\n${quoted}`
+			: "Retry the approved call exactly, character for character.";
+		return `not the approved call: ${by} approved request ${entry.requestId} for a different ${entry.toolName} input. ${repeat}\nIf you meant this different call, retry it once more to ask for a new decision`;
+	}
+
+	/**
+	 * The approved call as the agent wrote it, found by matching the slot
+	 * against the tool calls already in the session, so the wait never stores
+	 * the call's text. Only a bash command or a short input is quoted.
+	 */
+	function approvedCallText(entry: Deferred, ctx: ExtensionContext): string | undefined {
+		let input: unknown;
+		try {
+			const entries = ctx.sessionManager.getEntries();
+			for (let i = entries.length - 1; i >= 0 && input === undefined; i--) {
+				const message = Reflect.get(entries[i] as object, "message");
+				if (typeof message !== "object" || message === null || Reflect.get(message, "role") !== "assistant") continue;
+				const content = Reflect.get(message, "content");
+				if (!Array.isArray(content)) continue;
+				for (const part of content) {
+					if (typeof part !== "object" || part === null || Reflect.get(part, "type") !== "toolCall") continue;
+					if (Reflect.get(part, "name") !== entry.toolName) continue;
+					const args = Reflect.get(part, "arguments");
+					if (slotOf(judgmentKey(entry.toolName, args)) === entry.slot) {
+						input = args;
+						break;
+					}
+				}
+			}
+		} catch {
+			return undefined;
+		}
+		if (input === undefined) return undefined;
+		const command = typeof input === "object" && input !== null ? Reflect.get(input, "command") : undefined;
+		const text = typeof command === "string" ? command : JSON.stringify(input);
+		if (text.length > APPROVED_QUOTE_LIMIT) return undefined;
+		const fence = "```";
+		return `${fence}\n${redact(text)}\n${fence}`;
+	}
+
+	/**
 	 * Drop greenlight_escalate waits past their deadline. A gate wait is settled by
 	 * the retry that finds it expired; nothing retries a greenlight_escalate, and a
 	 * stale wait would count as pending, so an id-less reply to a live
@@ -850,7 +918,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	}
 
 	/** What the model reads in place of the orchestrator's raw reply. */
-	function replyNote(match: ReplyMatch): string {
+	function replyNote(match: ReplyMatch, ctx: ExtensionContext): string {
 		const entry = [...deferred.values()].find((pending) => pending.requestId === match.requestId);
 		const { decision, by } = match.decision;
 		const why = match.decision.reason ? `: ${match.decision.reason}` : "";
@@ -865,7 +933,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 			return `[greenlight] ${by} passed ${call} to a human. End your turn and wait; the decision comes as a later message.`;
 		}
 		if (decision === "approve") {
-			return `[greenlight] ${by} approved ${call}${why}. Retry that exact call now; a changed call needs a new decision.`;
+			const quoted = entry ? approvedCallText(entry, ctx) : undefined;
+			const exact = quoted ? ` It must be identical, character for character:\n${quoted}` : "";
+			return `[greenlight] ${by} approved ${call}${why}. Retry that exact call now; a changed call needs a new decision.${exact}`;
 		}
 		return `[greenlight] ${by} denied ${call}${why}. Do not retry it; adjust the plan or ask the user.`;
 	}
