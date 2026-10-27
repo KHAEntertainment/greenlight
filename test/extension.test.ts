@@ -356,6 +356,29 @@ describe("escalate mode", () => {
 				expect(await pi.emit("tool_call", destructiveCall, ctx)).toBeUndefined();
 			});
 
+			test("with two unused approvals, a different call still asks on its second try", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				const approve = async (id: string | undefined) => {
+					await pi.emit("input", { type: "input", text: `${header}{"id":"${id}","decision":"approve"}`, source: "rpc" }, ctx);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+				};
+				// Both calls are escalated before either is approved, so neither
+				// approval has pointed at anything yet.
+				const second = { ...destructiveCall, toolCallId: "call-4", input: { command: "rm -rf build && git push --force origin main" } };
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("tool_call", second, ctx);
+				expect(sent).toHaveLength(2);
+				await approve(sent[0]);
+				await approve(sent[1]);
+
+				const first = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(first.reason).toContain("not the approved call");
+				const asked = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(asked.reason).toContain("asked lead-1");
+				expect(sent).toHaveLength(3);
+			});
+
 			test("without the call in the session it still says to repeat it exactly", async () => {
 				const { pi, ctx, sent } = await traycerSetup();
 				await pi.emit("tool_call", destructiveCall, ctx);

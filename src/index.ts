@@ -166,8 +166,6 @@ interface Deferred {
 	deadline: number;
 	viaHuman: boolean;
 	outcome?: EscalationOutcome;
-	/** Set once a different call has been told this approval is not for it. */
-	mismatchNoted?: boolean;
 	cancel(): void;
 }
 const ERROR_NOTIFY_INTERVAL_MS = 60_000;
@@ -270,6 +268,8 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	const deferredSends = new Map<string, Promise<Deferred | typeof UNSAFE | undefined>>();
 	/** Decision notes pi queued during a run, until they start a user message. */
 	const queuedNotes = new Set<string>();
+	/** Slots of calls already told they are not the approved call: they ask on their next try. */
+	const toldNotApproved = new Set<string>();
 	/**
 	 * `/greenlight last` and `/greenlight output` read these; they are journal records rather
 	 * than live verdicts so a rehydrated session renders the same text as a live
@@ -683,9 +683,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		// An approval for another input of this tool is usually a retry that
 		// drifted (a changed `| tail -N`): say so once, with the call to repeat,
 		// rather than open a request the parent cannot tell from the first.
-		const approved = approvedElsewhere(event.toolName, slot, now);
+		const approved = toldNotApproved.has(slot) ? undefined : approvedElsewhere(event.toolName, slot, now);
 		if (approved) {
-			approved.mismatchNoted = true;
+			toldNotApproved.add(slot);
 			return { block: true, reason: `${reason} (${mismatchText(approved, ctx)})` };
 		}
 		let inflight = deferredSends.get(key);
@@ -846,15 +846,17 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	}
 
 	/**
-	 * An unused approval, still in time, for a different input of the same
-	 * tool, that has not yet been pointed out to the agent.
+	 * The most recent unused approval, still in time, for a different input of
+	 * the same tool.
 	 */
 	function approvedElsewhere(toolName: string, slot: string, now: number): Deferred | undefined {
+		let newest: Deferred | undefined;
 		for (const entry of deferred.values()) {
-			if (entry.slot === slot || entry.toolName !== toolName || entry.mismatchNoted) continue;
-			if (entry.outcome?.decision === "approve" && now <= entry.deadline) return entry;
+			if (entry.slot === slot || entry.toolName !== toolName) continue;
+			if (entry.outcome?.decision !== "approve" || now > entry.deadline) continue;
+			if (!newest || entry.sentAt > newest.sentAt) newest = entry;
 		}
-		return undefined;
+		return newest;
 	}
 
 	function mismatchText(entry: Deferred, ctx: ExtensionContext): string {
