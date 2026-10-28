@@ -28,3 +28,8 @@ Maintainer rules for this repository.
 - Never publish by hand again or add an npm token to the repo or workflow. A release goes through a version bump, a merge, and a GitHub release.
 - The package keeps the `pi-` prefix and the `pi-package` keyword so it shows in Pi's package gallery. The repository is plain `greenlight`.
 - Keep the credit line in the README: "A fork of y0usaf/pi-jev, which built the command check this is based on."
+
+<!-- entire-agent:begin -->
+Read .entire/agent-guide.md for this repository's workflow, source inspection, and verification guidance.
+@.entire/agent-guide.md
+<!-- entire-agent:end -->
