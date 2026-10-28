@@ -55,7 +55,7 @@ import {
 	summarizeVerdict,
 	type GateVerdict,
 } from "./gate";
-import { readGitContext } from "./git";
+import { type GitContext, readGitContext } from "./git";
 import {
 	buildOutputState,
 	evaluateOutput,
@@ -1140,21 +1140,30 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		event: { toolName: string; input: unknown },
 		ctx: ExtensionContext,
 	): Promise<GateVerdict | undefined> {
-		const cached = cache.get(key);
+		// The verdict depends on the checkout as well as the call: the same
+		// `git push origin x` is routine until origin gets a foreign pushurl. So
+		// the cache is keyed on both, while approvals stay keyed on the call.
+		const git = await readGitContext(
+			(command, args, options) => pi.exec(command, args, options),
+			ctx.cwd,
+			ctx.signal,
+		);
+		const cacheKey = `${key}\n${ctx.cwd}\n${JSON.stringify(git ?? null)}`;
+		const cached = cache.get(cacheKey);
 		if (
 			cached &&
 			(Date.now() - cached.at) / 1000 <= config.gate.cacheSeconds
 		) {
 			return cached.verdict;
 		}
-		const pending = inflight.get(key);
+		const pending = inflight.get(cacheKey);
 		if (pending) return pending;
 
-		const promise = judge(event, ctx).finally(() => inflight.delete(key));
-		inflight.set(key, promise);
+		const promise = judge(event, ctx, git).finally(() => inflight.delete(cacheKey));
+		inflight.set(cacheKey, promise);
 		const verdict = await promise;
 		if (verdict) {
-			cache.set(key, { at: Date.now(), verdict });
+			cache.set(cacheKey, { at: Date.now(), verdict });
 			prune();
 		}
 		return verdict;
@@ -1163,13 +1172,9 @@ export default function jevExtension(pi: ExtensionAPI): void {
 	async function judge(
 		event: { toolName: string; input: unknown },
 		ctx: ExtensionContext,
+		git: GitContext | undefined,
 	): Promise<GateVerdict | undefined> {
 		try {
-			const git = await readGitContext(
-				(command, args, options) => pi.exec(command, args, options),
-				ctx.cwd,
-				ctx.signal,
-			);
 			const response = await ask(
 				ctx,
 				buildGateState({

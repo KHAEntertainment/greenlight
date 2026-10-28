@@ -210,6 +210,32 @@ describe("gate modes", () => {
 		expect(asked[1]).toContain("the project's own repository");
 	});
 
+	test("a cached verdict is not reused after origin's push URL changes", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/acme/app.git",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		const push = { ...destructiveCall, input: { command: "git push origin issue-106" } };
+		await pi.emit("tool_call", push, ctx);
+		await pi.emit("tool_call", { ...push, toolCallId: "call-2" }, ctx);
+		expect(registry.calls).toHaveLength(1);
+
+		answers["remote get-url --push --all origin"] = "https://github.com/evil-org/drop.git";
+		await pi.emit("tool_call", { ...push, toolCallId: "call-3" }, ctx);
+		expect(registry.calls).toHaveLength(2);
+		expect(asked[1]).toContain("outside the project's own tooling");
+	});
+
 	test("a checkout git cannot read is still judged, without a git field", async () => {
 		const pi = fakePi();
 		const { ctx, registry } = await start(pi);
