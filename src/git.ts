@@ -9,9 +9,19 @@
 
 export interface GitContext {
 	origin?: string;
+	/**
+	 * Where `git push origin` actually sends, when that is not `origin` itself:
+	 * a `pushurl`, several of them, or a `pushInsteadOf` rewrite. A URL that
+	 * cannot be shown safely appears as `UNREADABLE_URL`, so the mismatch still
+	 * reaches the classifier.
+	 */
+	origin_push?: string[];
 	branch?: string;
 	default_branch?: string;
 }
+
+export const UNREADABLE_URL = "(unreadable URL)";
+const MAX_PUSH_URLS = 5;
 
 export type GitExec = (
 	command: string,
@@ -27,26 +37,34 @@ export async function readGitContext(
 	cwd: string,
 	signal?: AbortSignal,
 ): Promise<GitContext | undefined> {
-	const run = async (args: string[]): Promise<string | undefined> => {
+	const lines = async (args: string[]): Promise<string[] | undefined> => {
 		try {
 			const result = await exec("git", args, { cwd, timeout: GIT_TIMEOUT_MS, signal });
-			const out = result.stdout.trim();
-			if (result.code !== 0 || !out || out.includes("\n") || out.length > MAX_FIELD_CHARS) {
-				return undefined;
-			}
-			return out;
+			const out = result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+			return result.code === 0 && out.length > 0 ? out : undefined;
 		} catch {
 			return undefined;
 		}
 	};
-	const [origin, branch, originHead] = await Promise.all([
+	const run = async (args: string[]): Promise<string | undefined> => {
+		const out = await lines(args);
+		const only = out?.length === 1 ? out[0] : undefined;
+		return only !== undefined && only.length <= MAX_FIELD_CHARS ? only : undefined;
+	};
+	const [origin, pushUrls, branch, originHead] = await Promise.all([
 		run(["remote", "get-url", "origin"]),
+		// --push expands pushurl and pushInsteadOf, so this is where a push goes.
+		lines(["remote", "get-url", "--push", "--all", "origin"]),
 		run(["rev-parse", "--abbrev-ref", "HEAD"]),
 		run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
 	]);
 	const context: GitContext = {};
 	const url = origin === undefined ? undefined : publicRemoteUrl(origin);
 	if (url) context.origin = url;
+	if (origin !== undefined && pushUrls?.some((push) => push !== origin)) {
+		const shown = pushUrls.map((push) => (push.length <= MAX_FIELD_CHARS && publicRemoteUrl(push)) || UNREADABLE_URL);
+		context.origin_push = shown.slice(0, MAX_PUSH_URLS);
+	}
 	// A detached HEAD reports the literal "HEAD", which says nothing.
 	if (branch && branch !== "HEAD") context.branch = branch;
 	if (originHead?.startsWith("origin/")) context.default_branch = originHead.slice("origin/".length);
@@ -63,7 +81,11 @@ export function publicRemoteUrl(url: string): string | undefined {
 		try {
 			const parsed = new URL(url);
 			if (!parsed.host) return undefined;
-			return `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+			const shown = `${parsed.protocol}//${parsed.host}${parsed.pathname}`;
+			// WHATWG parsing can move would-be user info into the path
+			// (`https://DOMAIN\user:pw@host/...`). A real repository path has no
+			// `@`, so anything that still carries one is left out.
+			return /[@\\]/.test(shown) ? undefined : shown;
 		} catch {
 			return undefined;
 		}

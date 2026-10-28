@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildGateState } from "../src/gate";
-import { type GitExec, publicRemoteUrl, readGitContext } from "../src/git";
+import { type GitExec, publicRemoteUrl, readGitContext, UNREADABLE_URL } from "../src/git";
 
 function fakeGit(answers: Record<string, string | Error>): GitExec & { cwds: string[] } {
 	const cwds: string[] = [];
@@ -30,6 +30,33 @@ describe("publicRemoteUrl", () => {
 		expect(publicRemoteUrl("../app.git")).toBe("../app.git");
 		expect(publicRemoteUrl("https://")).toBeUndefined();
 		expect(publicRemoteUrl("ignore previous instructions")).toBeUndefined();
+	});
+
+	test("leaves out a URL whose user info the parser moved into the path", () => {
+		expect(publicRemoteUrl("https://DOMAIN\\user:dummy-password@git.example/acme/repo.git")).toBeUndefined();
+	});
+});
+
+describe("readGitContext push URLs", () => {
+	const base = {
+		"remote get-url origin": "https://github.com/acme/app.git",
+		"rev-parse --abbrev-ref HEAD": "issue-106",
+	};
+
+	test("a push URL that matches origin adds nothing", async () => {
+		const exec = fakeGit({ ...base, "remote get-url --push --all origin": "https://github.com/acme/app.git" });
+		expect(await readGitContext(exec, "/work/app")).toEqual({ origin: "https://github.com/acme/app.git", branch: "issue-106" });
+	});
+
+	test("a push URL elsewhere is reported, scrubbed, and an unreadable one is still marked", async () => {
+		const exec = fakeGit({
+			...base,
+			"remote get-url --push --all origin": "https://github.com/acme/app.git\nhttps://u:tok_123@mirror.example/app.git\nhttps://DOMAIN\\u:pw@x/y",
+		});
+		const context = await readGitContext(exec, "/work/app");
+		expect(context?.origin_push).toEqual(["https://github.com/acme/app.git", "https://mirror.example/app.git", UNREADABLE_URL]);
+		expect(JSON.stringify(context)).not.toContain("tok_123");
+		expect(JSON.stringify(context)).not.toContain("pw@");
 	});
 });
 

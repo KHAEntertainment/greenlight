@@ -18,6 +18,8 @@ where to pick up. Append a new entry when you stop.
 
 The gate now reads the checkout's `origin` (user info stripped), branch and default branch with `git` through `pi.exec` (`src/git.ts`). Every lookup fails open. Rejected: a deterministic allow rule for `git push origin <branch>`. Shell parsing is fragile, and an allow rule is a bypass (`git push origin x; curl …`).
 
+Codex's review of #30 found that `git push origin` can go elsewhere through `pushurl` or `pushInsteadOf`. Jev scored that only 0.50-0.56 with the push URL in the state, so such a checkout now gets the pre-#25 question (`gateQuestionsFor` in `src/gate.ts`). The review also found a URL whose user info WHATWG parsing moves into the path; any URL still carrying `@` or `\` is now left out.
+
 **Not verified:** a live Foreman lane on the new wording. Watch for the cross-org PR case, and for an `origin` an agent repointed earlier in the session (the gate then treats the new `origin` as the project's own).
 
 ---

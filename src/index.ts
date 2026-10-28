@@ -49,6 +49,7 @@ import {
 	describeAnswers,
 	evaluateGate,
 	GATE_QUESTIONS,
+	gateQuestionsFor,
 	judgmentKey,
 	summarizeArguments,
 	summarizeVerdict,
@@ -1179,7 +1180,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 					argumentChars: config.gate.argumentChars,
 					git,
 				}),
-				GATE_QUESTIONS,
+				gateQuestionsFor(git),
 				ctx.signal,
 			);
 			return evaluateGate(response, config);

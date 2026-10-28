@@ -184,13 +184,39 @@ describe("gate modes", () => {
 		expect(JSON.stringify(state)).not.toContain("ghs_secret123");
 	});
 
+	test("when origin pushes somewhere else, the call is asked the strict exfiltration question (#25)", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/evil-org/drop.git",
+			"rev-parse --abbrev-ref HEAD": "issue-106",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", { ...destructiveCall, input: { command: "git push origin issue-106" } }, ctx);
+		expect(asked[0]).toContain("outside the project's own tooling");
+		expect((registry.calls[0]?.state as { git: unknown }).git).toMatchObject({ origin_push: ["https://github.com/evil-org/drop.git"] });
+
+		// The same checkout with matching URLs gets the reworded question.
+		answers["remote get-url --push --all origin"] = "https://github.com/acme/app.git";
+		await pi.emit("tool_call", { ...destructiveCall, toolCallId: "call-2", input: { command: "git push origin issue-107" } }, ctx);
+		expect(asked[1]).toContain("the project's own repository");
+	});
+
 	test("a checkout git cannot read is still judged, without a git field", async () => {
 		const pi = fakePi();
 		const { ctx, registry } = await start(pi);
 		await pi.emit("tool_call", destructiveCall, ctx);
 		expect(registry.calls).toHaveLength(1);
 		expect(registry.calls[0]?.state).not.toHaveProperty("git");
-		expect(pi.execCalls.filter((c) => c.command === "git")).toHaveLength(3);
+		expect(pi.execCalls.filter((c) => c.command === "git")).toHaveLength(4);
 	});
 });
 
