@@ -16,11 +16,24 @@ export interface GitContext {
 	 * reaches the classifier.
 	 */
 	origin_push?: string[];
+	/**
+	 * The remote a plain `git push` picks, when it is not `origin`:
+	 * `branch.<name>.pushRemote`, then `remote.pushDefault`, then
+	 * `branch.<name>.remote`.
+	 */
+	push_remote?: string;
+	/**
+	 * Remotes besides `origin`. Jev reads `git push upstream x` as routine
+	 * (0.14-0.18) without knowing where `upstream` points, so their presence
+	 * alone brings back the strict exfiltration question.
+	 */
+	other_remotes?: string[];
 	branch?: string;
 	default_branch?: string;
 }
 
 export const UNREADABLE_URL = "(unreadable URL)";
+export const UNREADABLE_NAME = "(unreadable name)";
 const MAX_PUSH_URLS = 5;
 
 export type GitExec = (
@@ -51,24 +64,60 @@ export async function readGitContext(
 		const only = out?.length === 1 ? out[0] : undefined;
 		return only !== undefined && only.length <= MAX_FIELD_CHARS ? only : undefined;
 	};
-	const [origin, pushUrls, branch, originHead] = await Promise.all([
-		run(["remote", "get-url", "origin"]),
+	const [fetchUrls, pushUrls, head, originHead, pushConfig, remotes] = await Promise.all([
+		lines(["remote", "get-url", "origin"]),
 		// --push expands pushurl and pushInsteadOf, so this is where a push goes.
 		lines(["remote", "get-url", "--push", "--all", "origin"]),
 		run(["rev-parse", "--abbrev-ref", "HEAD"]),
 		run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
+		lines(["config", "--get-regexp", "^(remote\\.pushdefault|branch\\..*\\.(pushremote|remote))$"]),
+		lines(["remote"]),
 	]);
 	const context: GitContext = {};
-	const url = origin === undefined ? undefined : publicRemoteUrl(origin);
-	if (url) context.origin = url;
-	if (origin !== undefined && pushUrls?.some((push) => push !== origin)) {
+	const fetchUrl = fetchUrls?.length === 1 ? fetchUrls[0] : undefined;
+	const shownOrigin = fetchUrl !== undefined && fetchUrl.length <= MAX_FIELD_CHARS ? publicRemoteUrl(fetchUrl) : undefined;
+	if (shownOrigin) context.origin = shownOrigin;
+	// Compared raw and at any length: a fetch URL too long or too odd to show,
+	// or one git could not read, still makes a push URL count as elsewhere.
+	if (pushUrls && (fetchUrl === undefined || pushUrls.some((push) => push !== fetchUrl))) {
 		const shown = pushUrls.map((push) => (push.length <= MAX_FIELD_CHARS && publicRemoteUrl(push)) || UNREADABLE_URL);
 		context.origin_push = shown.slice(0, MAX_PUSH_URLS);
 	}
 	// A detached HEAD reports the literal "HEAD", which says nothing.
-	if (branch && branch !== "HEAD") context.branch = branch;
+	const branch = head && head !== "HEAD" ? head : undefined;
+	if (branch) context.branch = branch;
+	const pushRemote = defaultPushRemote(pushConfig ?? [], branch);
+	if (pushRemote !== "origin") {
+		context.push_remote = shownName(pushRemote);
+	}
+	const others = (remotes ?? []).filter((name) => name !== "origin");
+	if (others.length > 0) context.other_remotes = others.slice(0, MAX_PUSH_URLS).map(shownName);
 	if (originHead?.startsWith("origin/")) context.default_branch = originHead.slice("origin/".length);
 	return Object.keys(context).length > 0 ? context : undefined;
+}
+
+/** A remote name is agent-controlled text; only a plain one is passed on. */
+function shownName(name: string): string {
+	return /^[\w.-]{1,100}$/.test(name) ? name : UNREADABLE_NAME;
+}
+
+/**
+ * The remote a plain `git push` sends to, from `git config --get-regexp` lines
+ * (`<key> <value>`; git lowercases the section and key, not the branch name).
+ */
+function defaultPushRemote(entries: string[], branch: string | undefined): string {
+	const config = new Map<string, string>();
+	for (const entry of entries) {
+		const space = entry.indexOf(" ");
+		if (space > 0) config.set(entry.slice(0, space), entry.slice(space + 1).trim());
+	}
+	const at = (key: string) => config.get(key) || undefined;
+	return (
+		(branch && at(`branch.${branch}.pushremote`)) ||
+		at("remote.pushdefault") ||
+		(branch && at(`branch.${branch}.remote`)) ||
+		"origin"
+	);
 }
 
 /**

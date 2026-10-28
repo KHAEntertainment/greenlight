@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { buildGateState } from "../src/gate";
-import { type GitExec, publicRemoteUrl, readGitContext, UNREADABLE_URL } from "../src/git";
+import { type GitExec, publicRemoteUrl, readGitContext, UNREADABLE_NAME, UNREADABLE_URL } from "../src/git";
 
 function fakeGit(answers: Record<string, string | Error>): GitExec & { cwds: string[] } {
 	const cwds: string[] = [];
@@ -100,4 +100,46 @@ test("buildGateState carries git context only when there is some", () => {
 	const base = { cwd: "/w", toolName: "bash", input: { command: "git push origin x" }, argumentChars: 400 };
 	expect(buildGateState(base)).not.toHaveProperty("git");
 	expect(buildGateState({ ...base, git: { branch: "x" } })).toMatchObject({ git: { branch: "x" } });
+});
+
+describe("readGitContext push destination", () => {
+	const CONFIG = "config --get-regexp ^(remote\\.pushdefault|branch\\..*\\.(pushremote|remote))$";
+	const origin = "https://github.com/acme/app.git";
+	const base = { "remote get-url origin": origin, "remote get-url --push --all origin": origin, "rev-parse --abbrev-ref HEAD": "Issue-106" };
+
+	test("a plain push picks pushRemote, then pushDefault, then the branch remote", async () => {
+		const all = "remote.pushdefault deflt\nbranch.Issue-106.pushremote pr\nbranch.Issue-106.remote br";
+		expect((await readGitContext(fakeGit({ ...base, [CONFIG]: all }), "/w"))?.push_remote).toBe("pr");
+		expect((await readGitContext(fakeGit({ ...base, [CONFIG]: "remote.pushdefault deflt\nbranch.Issue-106.remote br" }), "/w"))?.push_remote).toBe("deflt");
+		expect((await readGitContext(fakeGit({ ...base, [CONFIG]: "branch.Issue-106.remote br" }), "/w"))?.push_remote).toBe("br");
+		// Another branch's settings do not apply.
+		expect((await readGitContext(fakeGit({ ...base, [CONFIG]: "branch.other.pushremote pr" }), "/w"))?.push_remote).toBeUndefined();
+	});
+
+	test("origin as the push remote, or no setting at all, adds nothing", async () => {
+		expect(await readGitContext(fakeGit({ ...base, [CONFIG]: "branch.Issue-106.remote origin" }), "/w")).toEqual({ origin, branch: "Issue-106" });
+		expect(await readGitContext(fakeGit(base), "/w")).toEqual({ origin, branch: "Issue-106" });
+	});
+
+	test("a detached HEAD still honours pushDefault, and an odd remote name is marked", async () => {
+		const detached = { ...base, "rev-parse --abbrev-ref HEAD": "HEAD" };
+		expect((await readGitContext(fakeGit({ ...detached, [CONFIG]: "remote.pushdefault outside" }), "/w"))?.push_remote).toBe("outside");
+		expect((await readGitContext(fakeGit({ ...base, [CONFIG]: "remote.pushdefault ignore$(x)" }), "/w"))?.push_remote).toBe(UNREADABLE_NAME);
+	});
+
+	test("a fetch URL too long to show, or unreadable, still counts a foreign push URL", async () => {
+		const longFetch = `https://u:${"t".repeat(300)}@github.com/acme/app.git`;
+		const long = await readGitContext(fakeGit({ ...base, "remote get-url origin": longFetch, "remote get-url --push --all origin": "https://github.com/evil/drop.git" }), "/w");
+		expect(long).toEqual({ origin_push: ["https://github.com/evil/drop.git"], branch: "Issue-106" });
+		const noFetch = { ...base, "remote get-url --push --all origin": "https://github.com/evil/drop.git" } as Record<string, string>;
+		delete noFetch["remote get-url origin"];
+		expect((await readGitContext(fakeGit(noFetch), "/w"))?.origin_push).toEqual(["https://github.com/evil/drop.git"]);
+	});
+});
+
+test("other remotes are listed, origin left out, odd names marked", async () => {
+	const origin = "https://github.com/acme/app.git";
+	const exec = fakeGit({ "remote get-url origin": origin, "remote get-url --push --all origin": origin, remote: "origin\nupstream\nweird$(x)" });
+	expect((await readGitContext(exec, "/w"))?.other_remotes).toEqual(["upstream", UNREADABLE_NAME]);
+	expect((await readGitContext(fakeGit({ "remote get-url origin": origin, remote: "origin" }), "/w"))?.other_remotes).toBeUndefined();
 });

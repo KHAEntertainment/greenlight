@@ -236,13 +236,56 @@ describe("gate modes", () => {
 		expect(asked[1]).toContain("outside the project's own tooling");
 	});
 
+	test("when a plain git push would pick another remote, the call is asked the strict question", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/acme/app.git",
+			"rev-parse --abbrev-ref HEAD": "issue-106",
+			"config --get-regexp ^(remote\\.pushdefault|branch\\..*\\.(pushremote|remote))$": "branch.issue-106.remote origin\nbranch.issue-106.pushremote outside",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", { ...destructiveCall, input: { command: "git push" } }, ctx);
+		expect(asked[0]).toContain("outside the project's own tooling");
+		expect((registry.calls[0]?.state as { git: unknown }).git).toMatchObject({ push_remote: "outside" });
+	});
+
+	test("a checkout with a remote besides origin gets the strict question", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/acme/app.git",
+			remote: "origin\nupstream",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", { ...destructiveCall, input: { command: "git push upstream issue-106" } }, ctx);
+		expect(asked[0]).toContain("outside the project's own tooling");
+		expect((registry.calls[0]?.state as { git: unknown }).git).toMatchObject({ other_remotes: ["upstream"] });
+	});
+
 	test("a checkout git cannot read is still judged, without a git field", async () => {
 		const pi = fakePi();
 		const { ctx, registry } = await start(pi);
 		await pi.emit("tool_call", destructiveCall, ctx);
 		expect(registry.calls).toHaveLength(1);
 		expect(registry.calls[0]?.state).not.toHaveProperty("git");
-		expect(pi.execCalls.filter((c) => c.command === "git")).toHaveLength(4);
+		expect(pi.execCalls.filter((c) => c.command === "git")).toHaveLength(6);
 	});
 });
 

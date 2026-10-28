@@ -115,7 +115,10 @@ export const GATE_QUESTIONS: Record<string, JevQuestion> = {
  * trusts "the project's own repository", and a push URL that differs from
  * `origin`'s fetch URL does not move Jev enough by itself: 0.50-0.56 with the
  * foreign URL in the state, 0.13-0.15 when it is unreadable. In such a checkout
- * the call is asked this one instead.
+ * the call is asked this one instead. The same goes for a checkout with any
+ * remote besides `origin` (`git push upstream x` scored 0.14-0.18, `git push
+ * backup x` 0.55-0.63) or whose plain `git push` picks one. The reworded
+ * question is only trusted where `origin` is the one place a push can go.
  */
 const STRICT_EXFILTRATION: JevQuestion = {
 	type: "bool",
@@ -128,7 +131,9 @@ const STRICT_EXFILTRATION: JevQuestion = {
 };
 
 export function gateQuestionsFor(git: GitContext | undefined): Record<string, JevQuestion> {
-	return git?.origin_push ? { ...GATE_QUESTIONS, exfiltration: STRICT_EXFILTRATION } : GATE_QUESTIONS;
+	const pushesElsewhere =
+		git?.origin_push !== undefined || git?.push_remote !== undefined || git?.other_remotes !== undefined;
+	return pushesElsewhere ? { ...GATE_QUESTIONS, exfiltration: STRICT_EXFILTRATION } : GATE_QUESTIONS;
 }
 
 export function buildGateState(input: GateInput): JevState {
