@@ -54,6 +54,7 @@ import {
 	summarizeVerdict,
 	type GateVerdict,
 } from "./gate";
+import { readGitContext } from "./git";
 import {
 	buildOutputState,
 	evaluateOutput,
@@ -1163,6 +1164,11 @@ export default function jevExtension(pi: ExtensionAPI): void {
 		ctx: ExtensionContext,
 	): Promise<GateVerdict | undefined> {
 		try {
+			const git = await readGitContext(
+				(command, args, options) => pi.exec(command, args, options),
+				ctx.cwd,
+				ctx.signal,
+			);
 			const response = await ask(
 				ctx,
 				buildGateState({
@@ -1171,6 +1177,7 @@ export default function jevExtension(pi: ExtensionAPI): void {
 					input: event.input,
 					userRequest: lastUserRequest(ctx),
 					argumentChars: config.gate.argumentChars,
+					git,
 				}),
 				GATE_QUESTIONS,
 				ctx.signal,

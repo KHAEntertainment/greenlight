@@ -6,6 +6,22 @@ where to pick up. Append a new entry when you stop.
 
 ---
 
+## 2026-10-27 to 2026-10-28: local session 1, 0.5.2 and own-repo pushes (#24, #25)
+
+**Shipped:** **0.5.2** (#26, #27). A retry that drifted from the approved call (`| tail -5` became `tail -6`) is told once that it is not the approved call, and the approve note quotes the exact call. Reviewed by Codex in three rounds and by CodeRabbit. #24 is closed.
+
+**#25, decided by the owner:** in the view-limits Foreman run, a lane's `git push` of its own branch to its own `origin` scored exfiltration 0.81-0.86 and was held. Probes on Jev 1.14 showed:
+- Adding `git: {origin, branch, default_branch}` to the state alone moved it by 0.03.
+- The question was the cause: its true criterion was "Local data or secrets leave the machine", which a push satisfies.
+- Of four rewordings, the shipped one counts secrets wherever they go (committing and pushing included) and other files only when they go somewhere other than the project's own repository. The rows are in `docs/REFERENCE.md` → Calibration → Exfiltration and the project's own repository.
+- The owner accepted one loosening: a PR against another org's repository now passes (0.60-0.66).
+
+The gate now reads the checkout's `origin` (user info stripped), branch and default branch with `git` through `pi.exec` (`src/git.ts`). Every lookup fails open. Rejected: a deterministic allow rule for `git push origin <branch>`. Shell parsing is fragile, and an allow rule is a bypass (`git push origin x; curl …`).
+
+**Not verified:** a live Foreman lane on the new wording. Watch for the cross-org PR case, and for an `origin` an agent repointed earlier in the session (the gate then treats the new `origin` as the project's own).
+
+---
+
 ## 2026-10-24 to 2026-10-25: local session 1, 0.4.4 and the rename to Greenlight
 
 **Shipped:**

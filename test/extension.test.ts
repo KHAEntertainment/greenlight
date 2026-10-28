@@ -166,6 +166,32 @@ describe("gate modes", () => {
 		expect(await pi.emit("tool_call", destructiveCall, ctx)).toBeUndefined();
 		expect(ctx.notifications.some((n) => n.type === "error" && n.message.includes("failing open"))).toBe(true);
 	});
+
+	test("the checkout's remote and branch reach the classifier, without credentials (#25)", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://x-access-token:ghs_secret123@github.com/acme/app.git",
+			"rev-parse --abbrev-ref HEAD": "issue-106",
+			"symbolic-ref --short refs/remotes/origin/HEAD": "origin/main",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const { ctx, registry } = await start(pi);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		const state = registry.calls[0]?.state as Record<string, unknown>;
+		expect(state.git).toEqual({ origin: "https://github.com/acme/app.git", branch: "issue-106", default_branch: "main" });
+		expect(JSON.stringify(state)).not.toContain("ghs_secret123");
+	});
+
+	test("a checkout git cannot read is still judged, without a git field", async () => {
+		const pi = fakePi();
+		const { ctx, registry } = await start(pi);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		expect(registry.calls).toHaveLength(1);
+		expect(registry.calls[0]?.state).not.toHaveProperty("git");
+		expect(pi.execCalls.filter((c) => c.command === "git")).toHaveLength(3);
+	});
 });
 
 describe("escalate mode", () => {
