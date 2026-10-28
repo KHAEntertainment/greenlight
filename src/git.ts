@@ -68,7 +68,7 @@ export async function readGitContext(
 		lines(["remote", "get-url", "origin"]),
 		// --push expands pushurl and pushInsteadOf, so this is where a push goes.
 		lines(["remote", "get-url", "--push", "--all", "origin"]),
-		run(["rev-parse", "--abbrev-ref", "HEAD"]),
+		lines(["rev-parse", "--abbrev-ref", "HEAD"]),
 		run(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]),
 		lines(["config", "--get-regexp", "^(remote\\.pushdefault|branch\\..*\\.(pushremote|remote))$"]),
 		lines(["remote"]),
@@ -83,9 +83,11 @@ export async function readGitContext(
 		const shown = pushUrls.map((push) => (push.length <= MAX_FIELD_CHARS && publicRemoteUrl(push)) || UNREADABLE_URL);
 		context.origin_push = shown.slice(0, MAX_PUSH_URLS);
 	}
-	// A detached HEAD reports the literal "HEAD", which says nothing.
-	const branch = head && head !== "HEAD" ? head : undefined;
-	if (branch) context.branch = branch;
+	// A detached HEAD reports the literal "HEAD", which says nothing. The raw
+	// name, at any length, decides where a plain push goes; only the shown
+	// copy is limited.
+	const branch = head?.length === 1 && head[0] !== "HEAD" ? head[0] : undefined;
+	if (branch && branch.length <= MAX_FIELD_CHARS) context.branch = branch;
 	const pushRemote = defaultPushRemote(pushConfig ?? [], branch);
 	if (pushRemote !== "origin") {
 		context.push_remote = shownName(pushRemote);

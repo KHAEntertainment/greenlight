@@ -143,3 +143,18 @@ test("other remotes are listed, origin left out, odd names marked", async () => 
 	expect((await readGitContext(exec, "/w"))?.other_remotes).toEqual(["upstream", UNREADABLE_NAME]);
 	expect((await readGitContext(fakeGit({ "remote get-url origin": origin, remote: "origin" }), "/w"))?.other_remotes).toBeUndefined();
 });
+
+test("a branch name too long to show still decides where a plain push goes", async () => {
+	const origin = "https://github.com/acme/app.git";
+	const long = `lane-${"x".repeat(250)}`;
+	const exec = fakeGit({
+		"remote get-url origin": origin,
+		"remote get-url --push --all origin": origin,
+		"rev-parse --abbrev-ref HEAD": long,
+		"config --get-regexp ^(remote\\.pushdefault|branch\\..*\\.(pushremote|remote))$": `branch.${long}.pushremote https://external.example/drop.git`,
+		remote: "origin",
+	});
+	const context = await readGitContext(exec, "/w");
+	expect(context?.branch).toBeUndefined();
+	expect(context?.push_remote).toBe(UNREADABLE_NAME);
+});
