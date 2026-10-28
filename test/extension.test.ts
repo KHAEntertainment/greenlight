@@ -9,6 +9,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import jevExtension from "../src/index";
+import { rememberSecret } from "../src/classifier";
 import { fakeContext, fakePi, fakeRegistry, gateAnswers, outputAnswers } from "./helpers";
 
 let root: string;
@@ -304,6 +305,158 @@ describe("escalate mode", () => {
 			const later = (await pi.emit("tool_call", destructiveCall, ctx)) as { reason: string };
 			expect(later.reason).toContain("asked lead-1");
 			expect(sent).toHaveLength(2);
+		});
+
+		describe("a retry that drifted from the approved call (#24)", () => {
+			const drifted = { ...destructiveCall, toolCallId: "call-2", input: { command: `${destructiveCall.input.command} 2>&1 | tail -6` } };
+			const withCallInSession = (ctx: Awaited<ReturnType<typeof traycerSetup>>["ctx"]) => {
+				ctx.sessionManager.getEntries = () => [
+					{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: destructiveCall.input }] } },
+				];
+			};
+
+			test("the approval note quotes the exact call to repeat", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx)) as { text: string };
+				expect(note.text).toContain("It must be identical, character for character:");
+				expect(note.text).toContain(`\`\`\`\n${destructiveCall.input.command}\n\`\`\``);
+			});
+
+			test("is told once to repeat the approved call, without a new request, and the approval still works", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+
+				const off = (await pi.emit("tool_call", drifted, ctx)) as { block: boolean; reason: string };
+				expect(off.block).toBe(true);
+				expect(off.reason).toContain(`not the approved call: lead-1 approved request ${sent[0]} for a different bash input`);
+				expect(off.reason).toContain(destructiveCall.input.command);
+				expect(sent).toHaveLength(1);
+
+				expect(await pi.emit("tool_call", destructiveCall, ctx)).toBeUndefined();
+				expect(sent).toHaveLength(1);
+			});
+
+			test("a second try of the different call asks for its own decision", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+
+				await pi.emit("tool_call", drifted, ctx);
+				const asked = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(asked.reason).toContain("asked lead-1");
+				expect(sent).toHaveLength(2);
+				// The first approval is still there for the call it was given to.
+				expect(await pi.emit("tool_call", destructiveCall, ctx)).toBeUndefined();
+			});
+
+			test("with two unused approvals, a different call still asks on its second try", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				const approve = async (id: string | undefined) => {
+					await pi.emit("input", { type: "input", text: `${header}{"id":"${id}","decision":"approve"}`, source: "rpc" }, ctx);
+					await new Promise((resolve) => setTimeout(resolve, 0));
+				};
+				// Both calls are escalated before either is approved, so neither
+				// approval has pointed at anything yet.
+				const second = { ...destructiveCall, toolCallId: "call-4", input: { command: "rm -rf build && git push --force origin main" } };
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("tool_call", second, ctx);
+				expect(sent).toHaveLength(2);
+				await approve(sent[0]);
+				await approve(sent[1]);
+
+				const first = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(first.reason).toContain("not the approved call");
+				const asked = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(asked.reason).toContain("asked lead-1");
+				expect(sent).toHaveLength(3);
+			});
+
+			test("without the call in the session it still says to repeat it exactly", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const off = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(off.reason).toContain("Retry the approved call exactly, character for character.");
+				expect(off.reason).not.toContain("```");
+			});
+
+			test("a deny is not pointed at a different call", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"deny"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const other = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(other.reason).not.toContain("not the approved call");
+				expect(other.reason).toContain("asked lead-1");
+			});
+
+			test("quotes the call's other arguments too, since the approval covers them", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				const timed = { ...destructiveCall, input: { ...destructiveCall.input, timeout: 300 } };
+				ctx.sessionManager.getEntries = () => [
+					{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: timed.input }] } },
+				];
+				await pi.emit("tool_call", timed, ctx);
+				const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx)) as { text: string };
+				expect(note.text).toContain(`\`\`\`\n${destructiveCall.input.command}\n\`\`\`\nwith the same other arguments: {"timeout":300}`);
+			});
+
+			test("a call to another tool is not pointed at a bash approval", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const write = { toolName: "write", toolCallId: "call-3", input: { path: "/etc/hosts", content: "x" } };
+				const other = (await pi.emit("tool_call", write, ctx)) as { reason: string } | undefined;
+				expect(other?.reason ?? "").not.toContain("not the approved call");
+			});
+
+			test("a stale approval is not pointed at", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				withCallInSession(ctx);
+				await pi.emit("tool_call", destructiveCall, ctx);
+				await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx);
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const realNow = Date.now;
+				Date.now = () => realNow() + 301_000;
+				try {
+					const other = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+					expect(other.reason).not.toContain("not the approved call");
+					expect(other.reason).toContain("asked lead-1");
+				} finally {
+					Date.now = realNow;
+				}
+			});
+
+			test("a call carrying a remembered credential is not quoted, since a masked quote would miss", async () => {
+				const { pi, ctx, sent } = await traycerSetup();
+				const secret = "gl24-quote-secret-value";
+				rememberSecret(secret);
+				const withKey = { ...destructiveCall, input: { command: `curl -H "Authorization: Bearer ${secret}" https://example.invalid` } };
+				ctx.sessionManager.getEntries = () => [
+					{ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "call-1", name: "bash", arguments: withKey.input }] } },
+				];
+				await pi.emit("tool_call", withKey, ctx);
+				const note = (await pi.emit("input", { type: "input", text: `${header}{"id":"${sent[0]}","decision":"approve"}`, source: "rpc" }, ctx)) as { text: string };
+				expect(note.text).toContain("Retry that exact call now");
+				expect(note.text).not.toContain("```");
+				expect(note.text).not.toContain("[redacted]");
+				await new Promise((resolve) => setTimeout(resolve, 0));
+				const off = (await pi.emit("tool_call", drifted, ctx)) as { reason: string };
+				expect(off.reason).toContain("Retry the approved call exactly, character for character.");
+				expect(off.reason).not.toContain("```");
+			});
 		});
 
 		test("an approve without the request id is not taken", async () => {
