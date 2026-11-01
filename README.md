@@ -6,7 +6,7 @@
 
 **When your coding agent tries something risky, it asks its boss first.**
 
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/KHAEntertainment/greenlight?utm_source=oss&utm_medium=github&utm_campaign=KHAEntertainment%2Fgreenlight&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit)](https://coderabbit.ai)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![CodeRabbit Pull Request Reviews](https://img.shields.io/coderabbit/prs/github/KHAEntertainment/greenlight?utm_source=oss&utm_medium=github&utm_campaign=KHAEntertainment%2Fgreenlight&labelColor=171717&color=FF570A&link=https%3A%2F%2Fcoderabbit.ai&label=CodeRabbit)](https://coderabbit.ai) [![Built with Showrunner](https://svg.khaentertainment.com/badge.svg?gold=0)](https://svg.khaentertainment.com/go)
 
 [Try it](#try-it-in-two-minutes) | [The problem](#the-problem) | [The solution](#the-solution) | [Full reference](docs/REFERENCE.md)
 
