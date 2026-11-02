@@ -166,6 +166,127 @@ describe("gate modes", () => {
 		expect(await pi.emit("tool_call", destructiveCall, ctx)).toBeUndefined();
 		expect(ctx.notifications.some((n) => n.type === "error" && n.message.includes("failing open"))).toBe(true);
 	});
+
+	test("the checkout's remote and branch reach the classifier, without credentials (#25)", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://x-access-token:ghs_secret123@github.com/acme/app.git",
+			"rev-parse --abbrev-ref HEAD": "issue-106",
+			"symbolic-ref --short refs/remotes/origin/HEAD": "origin/main",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const { ctx, registry } = await start(pi);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		const state = registry.calls[0]?.state as Record<string, unknown>;
+		expect(state.git).toEqual({ origin: "https://github.com/acme/app.git", branch: "issue-106", default_branch: "main" });
+		expect(JSON.stringify(state)).not.toContain("ghs_secret123");
+	});
+
+	test("when origin pushes somewhere else, the call is asked the strict exfiltration question (#25)", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/evil-org/drop.git",
+			"rev-parse --abbrev-ref HEAD": "issue-106",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", { ...destructiveCall, input: { command: "git push origin issue-106" } }, ctx);
+		expect(asked[0]).toContain("outside the project's own tooling");
+		expect((registry.calls[0]?.state as { git: unknown }).git).toMatchObject({ origin_push: ["https://github.com/evil-org/drop.git"] });
+
+		// The same checkout with matching URLs gets the reworded question.
+		answers["remote get-url --push --all origin"] = "https://github.com/acme/app.git";
+		await pi.emit("tool_call", { ...destructiveCall, toolCallId: "call-2", input: { command: "git push origin issue-107" } }, ctx);
+		expect(asked[1]).toContain("the project's own repository");
+	});
+
+	test("a cached verdict is not reused after origin's push URL changes", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/acme/app.git",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		const push = { ...destructiveCall, input: { command: "git push origin issue-106" } };
+		await pi.emit("tool_call", push, ctx);
+		await pi.emit("tool_call", { ...push, toolCallId: "call-2" }, ctx);
+		expect(registry.calls).toHaveLength(1);
+
+		answers["remote get-url --push --all origin"] = "https://github.com/evil-org/drop.git";
+		await pi.emit("tool_call", { ...push, toolCallId: "call-3" }, ctx);
+		expect(registry.calls).toHaveLength(2);
+		expect(asked[1]).toContain("outside the project's own tooling");
+	});
+
+	test("when a plain git push would pick another remote, the call is asked the strict question", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/acme/app.git",
+			"rev-parse --abbrev-ref HEAD": "issue-106",
+			"config --get-regexp ^(remote\\.pushdefault|branch\\..*\\.(pushremote|remote))$": "branch.issue-106.remote origin\nbranch.issue-106.pushremote outside",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", { ...destructiveCall, input: { command: "git push" } }, ctx);
+		expect(asked[0]).toContain("outside the project's own tooling");
+		expect((registry.calls[0]?.state as { git: unknown }).git).toMatchObject({ push_remote: "outside" });
+	});
+
+	test("a checkout with a remote besides origin gets the strict question", async () => {
+		const answers: Record<string, string> = {
+			"remote get-url origin": "https://github.com/acme/app.git",
+			"remote get-url --push --all origin": "https://github.com/acme/app.git",
+			remote: "origin\nupstream",
+		};
+		const pi = fakePi(async (command, args) => {
+			const stdout = command === "git" ? answers[args.join(" ")] : undefined;
+			return stdout === undefined ? { code: 2, stderr: "unexpected", stdout: "" } : { code: 0, stderr: "", stdout: `${stdout}\n` };
+		});
+		const asked: string[] = [];
+		const registry = fakeRegistry((questions) => {
+			asked.push((questions.exfiltration as { instructions: string }).instructions);
+			return { answers: gateAnswers() };
+		});
+		const { ctx } = await start(pi, {}, registry);
+		await pi.emit("tool_call", { ...destructiveCall, input: { command: "git push upstream issue-106" } }, ctx);
+		expect(asked[0]).toContain("outside the project's own tooling");
+		expect((registry.calls[0]?.state as { git: unknown }).git).toMatchObject({ other_remotes: ["upstream"] });
+	});
+
+	test("a checkout git cannot read is still judged, without a git field", async () => {
+		const pi = fakePi();
+		const { ctx, registry } = await start(pi);
+		await pi.emit("tool_call", destructiveCall, ctx);
+		expect(registry.calls).toHaveLength(1);
+		expect(registry.calls[0]?.state).not.toHaveProperty("git");
+		expect(pi.execCalls.filter((c) => c.command === "git")).toHaveLength(6);
+	});
 });
 
 describe("escalate mode", () => {
