@@ -23,9 +23,13 @@ export interface GitContext {
 	 */
 	push_remote?: string;
 	/**
-	 * Remotes besides `origin`. Jev reads `git push upstream x` as routine
-	 * (0.14-0.18) without knowing where `upstream` points, so their presence
-	 * alone brings back the strict exfiltration question.
+	 * Remotes besides `origin` that a push can reach. Jev reads
+	 * `git push upstream x` as routine (0.14-0.18) without knowing where
+	 * `upstream` points, so their presence alone brings back the strict
+	 * exfiltration question. A remote whose every push URL is a bare word, such
+	 * as the common `pushurl = DISABLE` on a fork's `upstream`, is left out: git
+	 * reads a bare word as a path in the working directory, so nothing it
+	 * pushes there leaves the machine.
 	 */
 	other_remotes?: string[];
 	branch?: string;
@@ -35,6 +39,8 @@ export interface GitContext {
 export const UNREADABLE_URL = "(unreadable URL)";
 export const UNREADABLE_NAME = "(unreadable name)";
 const MAX_PUSH_URLS = 5;
+/** Remotes checked for a disabled push URL; any beyond this count as pushable. */
+const MAX_REMOTES_CHECKED = 10;
 
 export type GitExec = (
 	command: string,
@@ -92,10 +98,34 @@ export async function readGitContext(
 	if (pushRemote !== "origin") {
 		context.push_remote = shownName(pushRemote);
 	}
-	const others = (remotes ?? []).filter((name) => name !== "origin");
+	const others = await pushableRemotes(
+		(remotes ?? []).filter((name) => name !== "origin"),
+		lines,
+	);
 	if (others.length > 0) context.other_remotes = others.slice(0, MAX_PUSH_URLS).map(shownName);
 	if (originHead?.startsWith("origin/")) context.default_branch = originHead.slice("origin/".length);
 	return Object.keys(context).length > 0 ? context : undefined;
+}
+
+/**
+ * The remotes a push could leave the machine through. A remote is dropped only
+ * when git reports every push URL and each is a bare word with no `/` or `:`
+ * (`DISABLE`, `no_push`): git resolves that as a path under the working
+ * directory. A failed lookup, an odd name, or a remote past the check limit
+ * counts as pushable, which keeps the strict question.
+ */
+async function pushableRemotes(
+	names: string[],
+	lines: (args: string[]) => Promise<string[] | undefined>,
+): Promise<string[]> {
+	const pushable = await Promise.all(
+		names.map(async (name, index) => {
+			if (index >= MAX_REMOTES_CHECKED || !/^[\w.][\w.-]{0,99}$/.test(name)) return true;
+			const urls = await lines(["remote", "get-url", "--push", "--all", name]);
+			return urls === undefined || urls.some((url) => !/^[\w.-]+$/.test(url));
+		}),
+	);
+	return names.filter((_, index) => pushable[index]);
 }
 
 /** A remote name is agent-controlled text; only a plain one is passed on. */

@@ -144,6 +144,38 @@ test("other remotes are listed, origin left out, odd names marked", async () => 
 	expect((await readGitContext(fakeGit({ "remote get-url origin": origin, remote: "origin" }), "/w"))?.other_remotes).toBeUndefined();
 });
 
+test("a remote whose every push URL is a bare word is not counted", async () => {
+	const origin = "https://github.com/acme/app.git";
+	const answers = {
+		"remote get-url origin": origin,
+		"remote get-url --push --all origin": origin,
+		remote: "origin\nupstream\nbackup\nmixed",
+		"remote get-url --push --all upstream": "DISABLE",
+		"remote get-url --push --all backup": "git@github.com:someone/backup.git",
+		"remote get-url --push --all mixed": "no_push\nhttps://github.com/evil/drop.git",
+	};
+	expect((await readGitContext(fakeGit(answers), "/w"))?.other_remotes).toEqual(["backup", "mixed"]);
+	// A fork with only a disabled upstream judges like an origin-only checkout.
+	const fork = { ...answers, remote: "origin\nupstream" };
+	expect((await readGitContext(fakeGit(fork), "/w"))?.other_remotes).toBeUndefined();
+});
+
+test("a remote is still counted when its push URLs cannot be read or checked", async () => {
+	const origin = "https://github.com/acme/app.git";
+	const many = Array.from({ length: 11 }, (_, i) => `r${i}`);
+	const answers: Record<string, string | Error> = {
+		"remote get-url origin": origin,
+		"remote get-url --push --all origin": origin,
+		remote: ["origin", "failed", "-odd", ...many].join("\n"),
+		"remote get-url --push --all failed": new Error("timeout"),
+		"remote get-url --push --all -odd": "DISABLE",
+	};
+	for (const name of many) answers[`remote get-url --push --all ${name}`] = "DISABLE";
+	const exec = fakeGit(answers);
+	// "failed" errors, "-odd" is never passed to git, and r8-r10 are past the ten-remote check limit.
+	expect((await readGitContext(exec, "/w"))?.other_remotes).toEqual(["failed", "-odd", "r8", "r9", "r10"]);
+});
+
 test("a branch name too long to show still decides where a plain push goes", async () => {
 	const origin = "https://github.com/acme/app.git";
 	const long = `lane-${"x".repeat(250)}`;
