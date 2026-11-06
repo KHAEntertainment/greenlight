@@ -7,6 +7,9 @@
  * missing git binary - the field is left out and the gate judges without it.
  */
 
+import { lstat } from "node:fs/promises";
+import { join } from "node:path";
+
 export interface GitContext {
 	origin?: string;
 	/**
@@ -27,9 +30,9 @@ export interface GitContext {
 	 * `git push upstream x` as routine (0.14-0.18) without knowing where
 	 * `upstream` points, so their presence alone brings back the strict
 	 * exfiltration question. A remote whose every push URL is a bare word, such
-	 * as the common `pushurl = DISABLE` on a fork's `upstream`, is left out: git
-	 * reads a bare word as a path in the working directory, so nothing it
-	 * pushes there leaves the machine.
+	 * as the common `pushurl = DISABLE` on a fork's `upstream`, is left out when
+	 * it has no `vcs` helper and no such path exists: git then reads the word as
+	 * a missing local path, and the push fails.
 	 */
 	other_remotes?: string[];
 	branch?: string;
@@ -101,6 +104,7 @@ export async function readGitContext(
 	const others = await pushableRemotes(
 		(remotes ?? []).filter((name) => name !== "origin"),
 		lines,
+		cwd,
 	);
 	if (others.length > 0) context.other_remotes = others.slice(0, MAX_PUSH_URLS).map(shownName);
 	if (originHead?.startsWith("origin/")) context.default_branch = originHead.slice("origin/".length);
@@ -109,23 +113,52 @@ export async function readGitContext(
 
 /**
  * The remotes a push could leave the machine through. A remote is dropped only
- * when git reports every push URL and each is a bare word with no `/` or `:`
- * (`DISABLE`, `no_push`): git resolves that as a path under the working
- * directory. A failed lookup, an odd name, or a remote past the check limit
- * counts as pushable, which keeps the strict question.
+ * when all of these hold:
+ * - git reports every push URL, and each is a bare word with no `/` or `:`
+ *   (`DISABLE`, `no_push`), which git reads as a local path;
+ * - it has no `remote.<name>.vcs`, which hands the URL to a remote helper
+ *   whatever it looks like (`git-remote-<vcs>`, or `ext` running a command);
+ * - no file, directory or symlink by that name (or `<name>.git`) exists in the
+ *   working directory, so the push has nowhere to land.
+ * A failed lookup, an odd name, or a remote past the check limit counts as
+ * pushable, which keeps the strict question.
  */
 async function pushableRemotes(
 	names: string[],
 	lines: (args: string[]) => Promise<string[] | undefined>,
+	cwd: string,
 ): Promise<string[]> {
+	if (names.length === 0) return names;
+	// core.repositoryformatversion is in every repository's config, so an empty
+	// answer means the lookup failed rather than "no vcs keys".
+	const vcsConfig = await lines(["config", "--get-regexp", "^(remote\\..*\\.vcs|core\\.repositoryformatversion)$"]);
+	if (vcsConfig === undefined) return names;
+	const withHelper = new Set(
+		vcsConfig
+			.map((entry) => entry.split(" ")[0] ?? "")
+			.filter((key) => key.startsWith("remote.") && key.endsWith(".vcs"))
+			.map((key) => key.slice("remote.".length, -".vcs".length)),
+	);
 	const pushable = await Promise.all(
 		names.map(async (name, index) => {
-			if (index >= MAX_REMOTES_CHECKED || !/^[\w.][\w.-]{0,99}$/.test(name)) return true;
+			if (index >= MAX_REMOTES_CHECKED || withHelper.has(name) || !/^[\w.][\w.-]{0,99}$/.test(name)) return true;
 			const urls = await lines(["remote", "get-url", "--push", "--all", name]);
-			return urls === undefined || urls.some((url) => !/^[\w.-]+$/.test(url));
+			if (urls === undefined || urls.some((url) => !/^[\w.-]+$/.test(url))) return true;
+			const found = await Promise.all(urls.flatMap((url) => [url, `${url}.git`]).map((path) => pathMayExist(join(cwd, path))));
+			return found.some(Boolean);
 		}),
 	);
 	return names.filter((_, index) => pushable[index]);
+}
+
+/** True unless the path is known to be absent; a symlink counts even if broken. */
+async function pathMayExist(path: string): Promise<boolean> {
+	try {
+		await lstat(path);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ENOENT";
+	}
 }
 
 /** A remote name is agent-controlled text; only a plain one is passed on. */
