@@ -29,6 +29,11 @@ writeFileSync(
 	JSON.stringify({ model: "fakejev/jev-fake", gate: { mode: "escalate" }, escalation: { timeoutSeconds: 5 } }),
 );
 
+// Run the child as if no orchestrator launched it. Under Traycer the parent's
+// TRAYCER_AGENT_ID/TRAYCER_EPIC_ID would make greenlight pick the traycer
+// transport over pi-rpc, and this harness only answers pi-rpc.
+const childEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("TRAYCER_")));
+
 const child = spawn(
 	join(repo, "node_modules/.bin/pi"),
 	[
@@ -38,7 +43,7 @@ const child = spawn(
 		"-e", join(repo, "src/index.ts"),
 		"--model", "faux/scripted",
 	],
-	{ cwd: project, env: { ...process.env, PI_CODING_AGENT_DIR: agentDir }, stdio: ["pipe", "pipe", "pipe"] },
+	{ cwd: project, env: { ...childEnv, PI_CODING_AGENT_DIR: agentDir }, stdio: ["pipe", "pipe", "pipe"] },
 );
 
 const report: Record<string, unknown> = { decision, escalations: 0, notifications: [] as string[] };
