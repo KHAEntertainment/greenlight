@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { buildGateState } from "../src/gate";
 import { type GitExec, publicRemoteUrl, readGitContext, UNREADABLE_NAME, UNREADABLE_URL } from "../src/git";
 
@@ -142,6 +145,83 @@ test("other remotes are listed, origin left out, odd names marked", async () => 
 	const exec = fakeGit({ "remote get-url origin": origin, "remote get-url --push --all origin": origin, remote: "origin\nupstream\nweird$(x)" });
 	expect((await readGitContext(exec, "/w"))?.other_remotes).toEqual(["upstream", UNREADABLE_NAME]);
 	expect((await readGitContext(fakeGit({ "remote get-url origin": origin, remote: "origin" }), "/w"))?.other_remotes).toBeUndefined();
+});
+
+const VCS_KEYS = "config --get-regexp ^(remote\\..*\\.vcs|core\\.repositoryformatversion)$";
+
+test("a remote whose every push URL is a bare word is not counted", async () => {
+	const origin = "https://github.com/acme/app.git";
+	const answers = {
+		"remote get-url origin": origin,
+		"remote get-url --push --all origin": origin,
+		remote: "origin\nupstream\nbackup\nmixed",
+		[VCS_KEYS]: "core.repositoryformatversion 0",
+		"remote get-url --push --all upstream": "DISABLE",
+		"remote get-url --push --all backup": "git@github.com:someone/backup.git",
+		"remote get-url --push --all mixed": "no_push\nhttps://github.com/evil/drop.git",
+	};
+	expect((await readGitContext(fakeGit(answers), "/w"))?.other_remotes).toEqual(["backup", "mixed"]);
+	// A fork with only a disabled upstream judges like an origin-only checkout.
+	const fork = { ...answers, remote: "origin\nupstream" };
+	expect((await readGitContext(fakeGit(fork), "/w"))?.other_remotes).toBeUndefined();
+});
+
+test("a remote is still counted when its push URLs cannot be read or checked", async () => {
+	const origin = "https://github.com/acme/app.git";
+	const many = Array.from({ length: 11 }, (_, i) => `r${i}`);
+	const answers: Record<string, string | Error> = {
+		"remote get-url origin": origin,
+		"remote get-url --push --all origin": origin,
+		remote: ["origin", "failed", "-odd", ...many].join("\n"),
+		[VCS_KEYS]: "core.repositoryformatversion 0",
+		"remote get-url --push --all failed": new Error("timeout"),
+		"remote get-url --push --all -odd": "DISABLE",
+	};
+	for (const name of many) answers[`remote get-url --push --all ${name}`] = "DISABLE";
+	const exec = fakeGit(answers);
+	// "failed" errors, "-odd" is never passed to git, and r8-r10 are past the ten-remote check limit.
+	expect((await readGitContext(exec, "/w"))?.other_remotes).toEqual(["failed", "-odd", "r8", "r9", "r10"]);
+});
+
+test("a bare-word push URL still counts with a vcs helper, a path by that name, or an unreadable config", async () => {
+	const origin = "https://github.com/acme/app.git";
+	const fork = {
+		"remote get-url origin": origin,
+		"remote get-url --push --all origin": origin,
+		remote: "origin\nupstream",
+		"remote get-url --push --all upstream": "DISABLE",
+		[VCS_KEYS]: "core.repositoryformatversion 0",
+	};
+	// remote.upstream.vcs hands DISABLE to git-remote-<vcs>, or to a command under `ext`.
+	const helper = { ...fork, [VCS_KEYS]: "core.repositoryformatversion 0\nremote.upstream.vcs ext" };
+	expect((await readGitContext(fakeGit(helper), "/w"))?.other_remotes).toEqual(["upstream"]);
+	// Without the config answer, a missing vcs key can't be told from a failed lookup.
+	const unread = { ...fork } as Record<string, string>;
+	delete unread[VCS_KEYS];
+	expect((await readGitContext(fakeGit(unread), "/w"))?.other_remotes).toEqual(["upstream"]);
+	// A path git would open instead: DISABLE itself, DISABLE.git, or a broken symlink.
+	for (const make of [
+		(dir: string) => mkdirSync(join(dir, "DISABLE")),
+		(dir: string) => writeFileSync(join(dir, "DISABLE.git"), ""),
+		(dir: string) => symlinkSync("/nonexistent/share", join(dir, "DISABLE")),
+	]) {
+		const dir = mkdtempSync(join(tmpdir(), "gl-remote-"));
+		try {
+			expect((await readGitContext(fakeGit(fork), dir))?.other_remotes).toBeUndefined();
+			make(dir);
+			expect((await readGitContext(fakeGit(fork), dir))?.other_remotes).toEqual(["upstream"]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}
+	// A path that can't be checked (here ENOTDIR, cwd being a file) counts as present.
+	const dir = mkdtempSync(join(tmpdir(), "gl-remote-"));
+	try {
+		writeFileSync(join(dir, "file"), "");
+		expect((await readGitContext(fakeGit(fork), join(dir, "file")))?.other_remotes).toEqual(["upstream"]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 test("a branch name too long to show still decides where a plain push goes", async () => {
